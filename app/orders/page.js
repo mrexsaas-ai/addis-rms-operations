@@ -15,12 +15,70 @@ export default async function OrdersPage() {
   const results = await Promise.all([
     supabase.from("menu_items").select("id, name, price, station").eq("restaurant_id", membership.restaurant_id).eq("is_available", true).order("name"),
     supabase.from("tables").select("id, table_number, name").eq("restaurant_id", membership.restaurant_id).order("table_number"),
-    supabase.from("orders").select("id, order_number, total, status, created_at, tables(table_number, name)").eq("restaurant_id", membership.restaurant_id).order("created_at", { ascending: false }).limit(30),
+    supabase.from("orders").select("id, order_number, total, status, created_by, tables(table_number, name)").eq("restaurant_id", membership.restaurant_id).order("created_by", { ascending: false }).limit(30),
   ]);
   const queryError = results.find((result) => result.error)?.error;
   if (queryError) throw queryError;
   const [{ data: menuItems }, { data: tables }, { data: orders }] = results;
 
+const orderIds = (orders || []).map((order) => order.id);
+
+const creatorIds = [
+  ...new Set(
+    (orders || [])
+      .map((order) => order.created_by)
+      .filter(Boolean)
+  ),
+];
+
+const [orderItemsResult, profilesResult] = await Promise.all([
+  orderIds.length
+    ? supabase
+        .from("order_items")
+        .select("id, order_id, quantity, menu_items(name)")
+        .eq("restaurant_id", membership.restaurant_id)
+        .in("order_id", orderIds)
+    : Promise.resolve({ data: [], error: null }),
+
+  creatorIds.length
+    ? supabase
+        .from("profiles")
+        .select("id, full_name")
+        .in("id", creatorIds)
+    : Promise.resolve({ data: [], error: null }),
+]);
+
+if (orderItemsResult.error) throw orderItemsResult.error;
+if (profilesResult.error) throw profilesResult.error;
+
+const orderItems = orderItemsResult.data || [];
+const profiles = profilesResult.data || [];
+
+const profileMap = new Map(
+  profiles.map((profile) => [
+    profile.id,
+    profile.full_name || "Not assigned",
+  ])
+);
+
+const itemsByOrder = new Map();
+
+for (const item of orderItems) {
+  const current = itemsByOrder.get(item.order_id) || [];
+
+  current.push({
+    name: item.menu_items?.name || "Unnamed item",
+    quantity: Number(item.quantity || 0),
+  });
+
+  itemsByOrder.set(item.order_id, current);
+}
+
+const recentOrders = (orders || []).map((order) => ({
+  ...order,
+  serverName: profileMap.get(order.created_by) || "Not assigned",
+  items: itemsByOrder.get(order.id) || [],
+}));
   return (
     <main className="workspace-page">
       <header className="workspace-header"><div><p className="eyebrow">SERVER WORKSPACE</p><h1>Orders</h1><p>Create an order and send it to the right station.</p></div><Link href="/">Overview</Link></header>
@@ -33,7 +91,7 @@ export default async function OrdersPage() {
           <label>Notes<textarea name="notes" rows="3" /></label>
           <button type="submit">Create order</button>
         </form>
-        <section className="workspace-panel"><p className="eyebrow">CURRENT ORDERS</p><h2>Today</h2><div className="workspace-list">{(orders || []).map((order) => <article className="workspace-row" key={order.id}><strong>{order.order_number}</strong><span>{order.status}</span><span>ETB {order.total}</span><form action={recordPayment}><input type="hidden" name="order_id" value={order.id} /><input name="amount" type="number" min="0.01" step="0.01" placeholder="Amount" required /><select name="method" defaultValue="CASH"><option value="CASH">Cash</option><option value="TELEBIRR">Telebirr</option><option value="BANK_TRANSFER">Bank transfer</option></select><input name="reference_number" placeholder="Reference (optional)" /><button type="submit">Record payment</button></form></article>)}{!orders?.length && <p>No orders yet.</p>}</div></section>
+        <section className="workspace-panel"><p className="eyebrow">CURRENT ORDERS</p><h2>Today</h2><div className="workspace-list">{(recentOrders || []).map((order) => <article className="workspace-row" key={order.id}><strong>{order.order_number}</strong><span>{order.status}</span><span>ETB {order.total}</span><form action={recordPayment}><input type="hidden" name="order_id" value={order.id} /><input name="amount" type="number" min="0.01" step="0.01" placeholder="Amount" required /><select name="method" defaultValue="CASH"><option value="CASH">Cash</option><option value="TELEBIRR">Telebirr</option><option value="BANK_TRANSFER">Bank transfer</option></select><input name="reference_number" placeholder="Reference (optional)" /><button type="submit">Record payment</button></form></article>)}{!recentOrders?.length && <p>No orders yet.</p>}</div></section>
       </section>
     </main>
   );

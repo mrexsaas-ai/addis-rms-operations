@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
-
 export default function WorkspaceLiveAlerts({ restaurantId, station }) {
   const [message, setMessage] = useState("");
   const seenOrderIds = useRef(new Set());

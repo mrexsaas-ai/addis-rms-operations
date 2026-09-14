@@ -14,7 +14,8 @@ alter table public.menu_items
 
 do $$
 begin
-  if not exists (
+  if not exists (,
+  
     select 1
     from pg_constraint
     where conrelid = 'public.menu_items'::regclass

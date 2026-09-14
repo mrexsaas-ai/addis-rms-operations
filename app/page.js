@@ -1,4 +1,5 @@
 import Link from "next/link";
+import DashboardClient from "@/app/admin/DashboardClient";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getAuthContext, getRoleHome } from "@/lib/auth";
 import { redirect } from "next/navigation";
@@ -478,8 +479,8 @@ function Dashboard({ data }) {
 
         <section className="welcome-row">
           <div>
-            <p className="eyebrow">
-              Operations overview
+            <p className="eyeOperations overviewbrow">
+              
             </p>
 
             <h2>

@@ -1,0 +1,99 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function hasRole(role) {
+      return isSignedIn() && request.auth.token.role == role;
+    }
+
+    function isTenant(data) {
+      return isSignedIn()
+        && data.restaurantId == request.auth.token.restaurantId;
+    }
+
+    function isTenantCreate() {
+      return isTenant(request.resource.data);
+    }
+
+    function isTenantUpdate() {
+      return isTenant(resource.data)
+        && isTenant(request.resource.data);
+    }
+
+    function canManageRestaurant() {
+      return hasRole('Admin');
+    }
+
+    function canManageOperations() {
+      return hasRole('Admin') || hasRole('Manager');
+    }
+
+    function canReadOperations() {
+      return hasRole('Admin') || hasRole('Manager') || hasRole('Waiter')
+        || hasRole('Chef') || hasRole('Barman');
+    }
+
+    match /users/{userId} {
+      allow read: if isTenant(resource.data)
+        && (request.auth.uid == userId || canManageRestaurant());
+      allow create: if isTenantCreate() && canManageRestaurant();
+      allow update: if isTenantUpdate()
+        && (request.auth.uid == userId || canManageRestaurant());
+      allow delete: if isTenant(resource.data) && canManageRestaurant();
+    }
+
+    match /restaurants/{restaurantId} {
+      allow read: if isTenant(resource.data) && canReadOperations();
+      allow create: if isTenantCreate() && canManageRestaurant();
+      allow update: if isTenantUpdate() && canManageRestaurant();
+      allow delete: if isTenant(resource.data) && canManageRestaurant();
+    }
+
+    match /menu_items/{itemId} {
+      allow read: if isTenant(resource.data) && canReadOperations();
+      allow create: if isTenantCreate() && canManageOperations();
+      allow update, delete: if isTenant(resource.data)
+        && isTenantUpdate() && canManageOperations();
+    }
+
+    match /orders/{orderId} {
+      allow read: if isTenant(resource.data) && canReadOperations();
+      allow create: if isTenantCreate()
+        && (canManageOperations() || hasRole('Waiter'));
+      allow update: if isTenantUpdate()
+        && (canManageOperations() || hasRole('Waiter') || hasRole('Chef')
+          || hasRole('Barman'));
+      allow delete: if isTenant(resource.data) && canManageOperations();
+    }
+
+    match /inventory/{inventoryId} {
+      allow read: if isTenant(resource.data) && canReadOperations();
+      allow create, update, delete: if isTenantCreate()
+        && canManageOperations();
+      allow update, delete: if isTenant(resource.data)
+        && isTenantUpdate() && canManageOperations();
+    }
+
+    match /payment_settings/{settingsId} {
+      allow read: if isTenant(resource.data) && canManageOperations();
+      allow create: if isTenantCreate() && canManageRestaurant();
+      allow update: if isTenantUpdate() && canManageRestaurant();
+      allow delete: if isTenant(resource.data) && canManageRestaurant();
+    }
+
+    match /financial_logs/{logId} {
+      allow read: if isTenant(resource.data) && canManageOperations();
+      allow create: if isTenantCreate() && canManageOperations();
+      allow update, delete: if isTenant(resource.data)
+        && isTenantUpdate() && canManageRestaurant();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

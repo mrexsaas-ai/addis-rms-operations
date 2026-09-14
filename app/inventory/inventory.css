@@ -1,0 +1,275 @@
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background: #09090b;
+  color: #f5f5f5;
+  font-family: Arial, sans-serif;
+}
+
+.inventory-page {
+  min-height: 100vh;
+  background: linear-gradient(180deg, #09090b 0%, #101114 100%);
+  color: #f5f5f5;
+  padding: 24px;
+}
+
+.inventory-shell {
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.brand-mark {
+  font-weight: 900;
+  letter-spacing: 0.18em;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  opacity: 0.7;
+  font-size: 11px;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(32px, 4vw, 52px);
+  line-height: 1.02;
+  letter-spacing: -0.06em;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.stat-card, .panel, .table-panel {
+  background: rgba(17, 17, 20, 0.95);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 18px;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+}
+
+.stat-card {
+  padding: 18px 20px;
+}
+
+.stat-label {
+  color: rgba(255,255,255,0.65);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.stat-value {
+  margin-top: 16px;
+  font-size: clamp(26px, 3vw, 38px);
+  font-weight: 800;
+  letter-spacing: -0.05em;
+}
+
+.content-grid {
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.stack {
+  display: grid;
+  gap: 20px;
+}
+
+.panel {
+  padding: 20px;
+}
+
+.panel h2 {
+  margin: 0 0 16px;
+  font-size: 20px;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.field label {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.7);
+}
+
+input, select, textarea, button {
+  font: inherit;
+}
+
+input, select, textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: #09090b;
+  color: #f5f5f5;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+button {
+  background: #d8ff45;
+  color: #101010;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.secondary {
+  background: transparent;
+  color: #f5f5f5;
+  border: 1px solid rgba(255,255,255,0.18);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.filter-form {
+  display: grid;
+  grid-template-columns: 1.4fr 210px 210px auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.table-panel {
+  padding: 16px;
+  overflow: hidden;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  text-align: left;
+  padding: 12px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  vertical-align: top;
+}
+
+th {
+  color: rgba(255,255,255,0.7);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.09);
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.status-pending {
+  background: rgba(255, 191, 36, 0.12);
+  color: #ffc857;
+}
+
+.status-approved {
+  background: rgba(80, 220, 120, 0.12);
+  color: #74f0a4;
+}
+
+.status-fulfilled {
+  background: rgba(116, 240, 164, 0.14);
+  color: #9ae7ba;
+}
+
+.status-rejected {
+  background: rgba(255, 90, 90, 0.14);
+  color: #ff8c8c;
+}
+
+.mini-form {
+  display: grid;
+  gap: 8px;
+  min-width: 180px;
+}
+
+.inline-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.list-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.list-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: rgba(255,255,255,0.02);
+}
+
+.muted {
+  color: rgba(255,255,255,0.66);
+}
+
+.danger {
+  background: rgba(255, 97, 97, 0.14);
+  color: #ffb0b0;
+}
+
+@media (max-width: 980px) {
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-form {
+    grid-template-columns: 1fr;
+  }
+}

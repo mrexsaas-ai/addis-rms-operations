@@ -10,12 +10,25 @@ const ROLE_HOME = {
   BARMAN: "/bar",
 };
 
+const PUBLIC_PATHS = new Set(["/login", "/signup", "/staff-login", "/auth/callback"]);
+
 export async function proxy(request) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  let response = NextResponse.next({ request });
 
-  if (!url || !key) return response;
+  let response = NextResponse.next({
+    request,
+  });
+
+  function redirectWithCookies(destination) {
+    const redirectResponse = NextResponse.redirect(new URL(destination, request.url));
+    response.cookies.getAll().forEach((cookie) => redirectResponse.cookies.set(cookie));
+    return redirectResponse;
+  }
+
+  if (!url || !key) {
+    return response;
+  }
 
   const supabase = createServerClient(url, key, {
     cookies: {
@@ -23,52 +36,78 @@ export async function proxy(request) {
         return request.cookies.getAll();
       },
       setAll(cookiesToSet) {
-        cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+        cookiesToSet.forEach(({ name, value }) => {
+          request.cookies.set(name, value);
+        });
         response = NextResponse.next({ request });
-        cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
+        cookiesToSet.forEach(({ name, value, options }) => {
+          response.cookies.set(name, value, options);
+        });
       },
     },
   });
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const { data: { user }, error } = await supabase.auth.getUser();
   const pathname = request.nextUrl.pathname;
 
-  if (!user && pathname !== "/login") {
-    return NextResponse.redirect(new URL("/login", request.url));
+  if (error && !user) {
+    if (!PUBLIC_PATHS.has(pathname)) {
+      return redirectWithCookies("/login");
+    }
   }
 
-  if (user) {
-    const { data: membership } = await supabase
-      .from("restaurant_users")
-      .select("role")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
-    const role = membership?.role;
-    if (pathname === "/login" && role && ROLE_HOME[role]) {
-      return NextResponse.redirect(new URL(ROLE_HOME[role], request.url));
+  if (!user) {
+    if (!PUBLIC_PATHS.has(pathname)) {
+      return redirectWithCookies("/login");
     }
+    return response;
+  }
 
-    const rules = [
-      { prefixes: ["/admin", "/staff"], roles: ["ADMIN", "OWNER"] },
-      { prefixes: ["/menu"], roles: ["ADMIN", "OWNER", "MANAGER"] },
-      { prefixes: ["/tables"], roles: ["ADMIN", "OWNER", "MANAGER", "SERVER"] },
-      { prefixes: ["/server", "/orders"], roles: ["ADMIN", "OWNER", "MANAGER", "SERVER"] },
-      { prefixes: ["/kitchen"], roles: ["ADMIN", "OWNER", "MANAGER", "CHEF"] },
-      { prefixes: ["/bar"], roles: ["ADMIN", "OWNER", "MANAGER", "BARMAN"] },
-      { prefixes: ["/payments", "/reports"], roles: ["ADMIN", "OWNER", "MANAGER", "SERVER"] },
-      { prefixes: ["/inventory"], roles: ["ADMIN", "OWNER", "MANAGER", "CHEF", "BARMAN"] },
-    ];
+  const { data: membership } = await supabase
+    .from("restaurant_users")
+    .select("role, restaurants(status)")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: true })
+    .limit(2);
 
-    const rule = rules.find(({ prefixes }) =>
-      prefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
-    );
+  const memberships = membership || [];
+  const ambiguousMembership = memberships.length > 1;
+  const selectedMembership = memberships.length === 1 ? memberships[0] : null;
 
-    if (rule && !rule.roles.includes(role)) {
-      return NextResponse.redirect(new URL(ROLE_HOME[role] || "/login", request.url));
-    }
+  const role = selectedMembership?.role;
+  const restaurant = Array.isArray(selectedMembership?.restaurants)
+    ? selectedMembership.restaurants[0]
+    : selectedMembership?.restaurants;
+  const restaurantInactive = Boolean(selectedMembership && restaurant?.status !== "ACTIVE");
+  if (ambiguousMembership && !PUBLIC_PATHS.has(pathname)) {
+    return redirectWithCookies("/login?membershipAmbiguous=1");
+  }
+
+  if (restaurantInactive && !PUBLIC_PATHS.has(pathname)) {
+    return redirectWithCookies("/login?restaurantInactive=1");
+  }
+
+  if (!restaurantInactive && pathname === "/login" && role && ROLE_HOME[role]) {
+    return redirectWithCookies(ROLE_HOME[role]);
+  }
+
+  const rules = [
+    { prefixes: ["/admin", "/staff"], roles: ["ADMIN", "OWNER"] },
+    { prefixes: ["/menu"], roles: ["ADMIN", "OWNER", "MANAGER"] },
+    { prefixes: ["/tables"], roles: ["ADMIN", "OWNER", "MANAGER", "SERVER"] },
+    { prefixes: ["/server", "/orders"], roles: ["ADMIN", "OWNER", "MANAGER", "SERVER"] },
+    { prefixes: ["/kitchen"], roles: ["ADMIN", "OWNER", "MANAGER", "CHEF"] },
+    { prefixes: ["/bar"], roles: ["ADMIN", "OWNER", "MANAGER", "BARMAN"] },
+    { prefixes: ["/payments", "/reports"], roles: ["ADMIN", "OWNER", "MANAGER", "SERVER"] },
+    { prefixes: ["/inventory"], roles: ["ADMIN", "OWNER", "MANAGER", "CHEF", "BARMAN"] },
+  ];
+
+  const rule = rules.find(({ prefixes }) =>
+    prefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
+  );
+
+  if (rule && (!role || !rule.roles.includes(role))) {
+    return redirectWithCookies(ROLE_HOME[role] || "/login");
   }
 
   return response;

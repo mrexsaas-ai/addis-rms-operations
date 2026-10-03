@@ -2,6 +2,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import "./admin/settings/settings.css";
 import { LanguageProvider } from "./i18n/LanguageProvider";
+import AuthenticatedControls from "./i18n/AuthenticatedControls";
 import GlobalLanguageDrawer from "./i18n/GlobalLanguageDrawer";
 import LocalizedLogout from "./i18n/LocalizedLogout";
 
@@ -25,6 +26,7 @@ export default function RootLayout({ children }) {
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
       <body>
         <LanguageProvider>
+          <AuthenticatedControls loginOnly />
           {children}
           <LocalizedLogout />
           <GlobalLanguageDrawer />

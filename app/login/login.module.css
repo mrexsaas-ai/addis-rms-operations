@@ -1,0 +1,359 @@
+.loginPage:global(.login-page) {
+  align-items: center;
+  background: #050607;
+  color: #f5fbfc;
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 110px 24px 40px;
+  position: relative;
+}
+
+.loginPage:global(.login-page) :global(.login-topbar) {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  left: 0;
+  padding: 24px clamp(22px, 5vw, 60px);
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+
+.loginPage:global(.login-page) :global(.login-brand) {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+}
+
+.loginPage:global(.login-page) :global(.login-brand-mark) {
+  align-items: center;
+  display: flex;
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+}
+
+.loginPage:global(.login-page) :global(.login-brand-mark)::before {
+  align-items: center;
+  border: 2px solid currentColor;
+  content: "A";
+  display: flex;
+  font-size: 13px;
+  font-weight: 900;
+  height: 30px;
+  justify-content: center;
+  margin-right: 10px;
+  width: 30px;
+}
+
+.loginPage:global(.login-page) :global(.login-brand-subtitle) {
+  color: #8b999f;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.loginPage:global(.login-page) :global(.login-card) {
+  background: #0d1114;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  max-width: 460px;
+  padding: 42px;
+  width: 100%;
+}
+
+.loginPage:global(.login-page) :global(.login-heading) {
+  margin-bottom: 30px;
+}
+
+.loginPage:global(.login-page) :global(.login-heading h1) {
+  font-size: clamp(30px, 5vw, 42px);
+  letter-spacing: -0.055em;
+  line-height: 1;
+  margin: 0 0 13px;
+}
+
+.loginPage:global(.login-page) :global(.login-heading > p:last-child) {
+  color: #aab4bb;
+  font-size: 13px;
+  line-height: 1.7;
+  margin: 0;
+}
+
+.loginPage:global(.login-page) :global(.login-form) {
+  display: grid;
+  gap: 17px;
+}
+
+.loginPage:global(.login-page) :global(.login-form label) {
+  color: #c4d0d4;
+  display: grid;
+  font-size: 11px;
+  font-weight: 700;
+  gap: 8px;
+}
+
+.loginPage:global(.login-page) :global(.login-form input) {
+  background: #080c0f;
+  border: 1px solid #29353b;
+  border-radius: 5px;
+  color: #f5fbfc;
+  font: inherit;
+  min-height: 46px;
+  padding: 12px 13px;
+  width: 100%;
+}
+
+.loginPage:global(.login-page) :global(.login-form input::placeholder) {
+  color: #87949a;
+}
+
+.loginPage:global(.login-page) :global(.login-form input:focus) {
+  border-color: #00e5ff;
+  outline: 2px solid rgba(0, 229, 255, 0.28);
+  outline-offset: 1px;
+}
+
+.loginPage:global(.login-page) :global(.password-field) {
+  align-items: center;
+  display: flex;
+  position: relative;
+}
+
+.loginPage:global(.login-page) :global(.password-field input) {
+  padding-right: 62px;
+}
+
+.loginPage:global(.login-page) :global(.login-form .password-toggle) {
+  background: transparent;
+  border: 0;
+  color: #d9e4e7;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  margin: 0;
+  padding: 8px;
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.loginPage:global(.login-page) :global(.login-form .password-toggle:hover) {
+  background: transparent;
+  color: #00e5ff;
+}
+
+.loginPage:global(.login-page) :global(.login-options) {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-top: -2px;
+}
+
+.loginPage:global(.login-page) :global(.login-form .remember-option) {
+  align-items: center;
+  color: #aab4bb;
+  display: flex;
+  flex-direction: row;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 8px;
+}
+
+.loginPage:global(.login-page) :global(.remember-option input) {
+  accent-color: #00e5ff;
+  height: 15px;
+  margin: 0;
+  min-height: 15px;
+  width: 15px;
+}
+
+.loginPage:global(.login-page) :global(.secure-label) {
+  color: #7f8d93;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+
+.loginPage:global(.login-page) :global(.login-form .form-error) {
+  background: #241416;
+  border: 1px solid #58313a;
+  border-radius: 5px;
+  color: #ffb7c1;
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.loginPage:global(.login-page) :global(.login-form .login-submit) {
+  background: #0d171b;
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  border-radius: 5px;
+  color: #e9fbff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  margin-top: 5px;
+  min-height: 48px;
+  padding: 13px;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.loginPage:global(.login-page) :global(.login-form .login-submit:hover) {
+  transform: translateY(-1px);
+}
+
+.loginPage:global(.login-page) :global(.login-form .login-submit:disabled) {
+  cursor: wait;
+  opacity: 0.6;
+  transform: none;
+}
+
+.loginPage:global(.login-page) :global(.login-footer) {
+  color: #aaa69e;
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  margin: 24px 0 0;
+  text-align: center;
+}
+
+.loginPage:global(.login-page) :global(.public-form-success) {
+  margin-bottom: 18px;
+}
+
+:global(body:has(.login-page) .global-language-trigger) {
+  display: none;
+}
+
+:global(body:has(.login-page) .global-logout) {
+  display: none;
+}
+
+:global(body:has(.login-page) .authenticated-controls-bar) {
+  background: #050708;
+  border-bottom: 1px solid rgba(77, 225, 237, 0.14);
+  padding: 8px clamp(14px, 3vw, 42px);
+  position: relative;
+  z-index: 30;
+}
+
+:global(body:has(.login-page) .authenticated-controls) {
+  align-items: center;
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 auto;
+  max-width: 1440px;
+}
+
+:global(body:has(.login-page) .authenticated-controls-bar .global-language-trigger) {
+  background: #0b1012;
+  border-color: #294247;
+  border-radius: 7px;
+  color: #e9f5f6;
+  display: inline-flex;
+  min-height: 40px;
+  padding: 0 11px;
+  position: static;
+}
+
+:global(body:has(.login-page) .authenticated-controls-bar .global-language-trigger:hover) {
+  background: rgba(77, 225, 237, 0.1);
+  border-color: #4de1ed;
+  color: #fff;
+}
+
+:global(body:has(.login-page) .authenticated-language-label) {
+  color: #9ba9ab;
+}
+
+:global(body:has(.login-page) .authenticated-language-current) {
+  align-items: center;
+  color: #f5fbfb;
+  display: inline-flex;
+  font-weight: 700;
+  gap: 8px;
+}
+
+:global(body:has(.login-page) .authenticated-language-current > span) {
+  color: #4de1ed;
+  font-size: 15px;
+  line-height: 1;
+}
+
+:global(body:has(.login-page) .global-language-drawer) {
+  background: #0d1114;
+  border-color: #294247;
+  color: #f5fbfc;
+}
+
+:global(body:has(.login-page) .global-language-option) {
+  border-color: #29353b;
+  color: #f5fbfc;
+}
+
+:global(body:has(.login-page) .global-language-option:hover),
+:global(body:has(.login-page) .global-language-option.selected) {
+  border-color: #00e5ff;
+}
+
+@media (max-width: 620px) {
+  :global(body:has(.login-page) .authenticated-controls-bar) {
+    padding: 7px 12px;
+  }
+
+  :global(body:has(.login-page) .authenticated-controls) {
+    justify-content: stretch;
+  }
+
+  :global(body:has(.login-page) .authenticated-controls-bar .global-language-trigger) {
+    flex: 1 1 auto;
+    justify-content: space-between;
+    min-width: 0;
+  }
+
+  .loginPage:global(.login-page) {
+    align-items: flex-start;
+    padding: 100px 16px 30px;
+  }
+
+  .loginPage:global(.login-page) :global(.login-topbar) {
+    padding: 20px 16px;
+  }
+
+  .loginPage:global(.login-page) :global(.login-brand) {
+    gap: 8px;
+  }
+
+  .loginPage:global(.login-page) :global(.login-brand-mark) {
+    font-size: 15px;
+  }
+
+  .loginPage:global(.login-page) :global(.login-brand-mark)::before {
+    height: 26px;
+    margin-right: 7px;
+    width: 26px;
+  }
+
+  .loginPage:global(.login-page) :global(.login-brand-subtitle) {
+    display: none;
+  }
+
+  .loginPage:global(.login-page) :global(.login-card) {
+    padding: 30px 22px;
+  }
+
+  .loginPage:global(.login-page) :global(.login-heading h1) {
+    font-size: 32px;
+  }
+
+  .loginPage:global(.login-page) :global(.login-options) {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+}

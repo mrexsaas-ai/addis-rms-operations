@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useLanguage } from "./LanguageProvider";
 
-export default function GlobalLanguageDrawer() {
+export default function GlobalLanguageDrawer({ showLabel = false }) {
   const { language, setLanguage, languages, t } = useLanguage();
   const [open, setOpen] = useState(false);
   const selected = languages.find((entry) => entry.code === language) || languages[0];
@@ -18,7 +18,11 @@ export default function GlobalLanguageDrawer() {
         title={t("language")}
       >
         <span aria-hidden="true">文</span>
-        <span>{selected.nativeLabel}</span>
+        {showLabel && <span className="authenticated-language-label">{t("language")}</span>}
+        <span className={showLabel ? "authenticated-language-current" : undefined}>
+          {selected.nativeLabel}
+          {showLabel && <span aria-hidden="true">⌄</span>}
+        </span>
       </button>
 
       {open ? (

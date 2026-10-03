@@ -2,30 +2,20 @@
 
 import { revalidatePath } from "next/cache";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getAuthContext, requireActiveRestaurantAccess } from "@/lib/auth";
+import { normalizeVerifyEtProvider } from "@/lib/payments/verify-et-provider.mjs";
 
 const adminRoles = ["ADMIN", "OWNER"];
 const paymentMethods = ["CASH", "TELEBIRR", "BANK_TRANSFER"];
 const languages = ["en", "am", "om", "ti"];
 const accountTypes = ["BANK_TRANSFER", "TELEBIRR"];
+const businessTypes = ["Restaurant", "Cafe", "Hotel", "Other food-service business"];
 
 async function getAdminContext() {
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
+  const { user, membership } = await requireActiveRestaurantAccess(supabase);
 
-  if (authError) throw authError;
   if (!user) throw new Error("You must be signed in.");
-
-  const { data: membership, error } = await supabase
-    .from("restaurant_users")
-    .select("restaurant_id, role")
-    .eq("user_id", user.id)
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw error;
   if (!membership || !adminRoles.includes(membership.role)) {
     throw new Error("You do not have permission to manage settings.");
   }
@@ -54,7 +44,9 @@ function checkedMethods(formData) {
 
 export async function saveSettings(formData) {
   const { supabase, restaurantId } = await getAdminContext();
-  const name = requiredText(formData, "restaurant_name", "Restaurant name");
+  const name = requiredText(formData, "restaurant_name", "Business display name");
+  const businessLegalName = requiredText(formData, "business_legal_name", "Business name");
+  const businessType = String(formData.get("business_type") || "").trim();
   const phone = optionalText(formData, "phone", 40);
   const address = optionalText(formData, "address", 255);
   const logoUrl = optionalText(formData, "logo_url", 500);
@@ -63,10 +55,13 @@ export async function saveSettings(formData) {
   if (!languages.includes(defaultLanguage)) {
     throw new Error("Choose a supported application language.");
   }
+  if (!businessTypes.includes(businessType)) {
+    throw new Error("Business category is not supported.");
+  }
 
   const { error: restaurantError } = await supabase
     .from("restaurants")
-    .update({ name, phone, address, logo_url: logoUrl, updated_at: new Date().toISOString() })
+    .update({ name, business_legal_name: businessLegalName, description: businessType, phone, address, logo_url: logoUrl, updated_at: new Date().toISOString() })
     .eq("id", restaurantId);
 
   if (restaurantError) throw restaurantError;
@@ -95,14 +90,26 @@ export async function saveBankAccount(formData) {
   const { supabase, restaurantId } = await getAdminContext();
   const id = optionalText(formData, "id", 80);
   const type = String(formData.get("type") || "BANK_TRANSFER");
-  const name = requiredText(formData, "name", "Bank name");
+  const submittedName = requiredText(formData, "name", "Bank name");
   const accountName = requiredText(formData, "account_name", "Account name");
   const accountNumber = requiredText(formData, "account_number", "Account number", 80);
   const branch = optionalText(formData, "branch", 120);
-  const qrCodeUrl = optionalText(formData, "qr_code_url", 500);
-  const isActive = formData.get("is_active") === "on";
+  const submittedProvider = String(formData.get("verify_et_provider") || "").trim().toLowerCase();
 
   if (!accountTypes.includes(type)) throw new Error("Choose a supported account type.");
+  if (submittedProvider && !normalizeVerifyEtProvider(submittedProvider)) {
+    throw new Error("Choose a supported Verify.et provider or leave it manual-only.");
+  }
+  if (type === "TELEBIRR" && submittedProvider && submittedProvider !== "telebirr") {
+    throw new Error("Telebirr accounts must use the Telebirr provider.");
+  }
+  if (type === "BANK_TRANSFER" && submittedProvider === "telebirr") {
+    throw new Error("Telebirr is not a bank-transfer provider.");
+  }
+
+  const name = type === "TELEBIRR" ? "Telebirr" : submittedName;
+  const verifyEtProvider = type === "TELEBIRR" ? "telebirr" : submittedProvider || null;
+  const isActive = type === "TELEBIRR" ? true : formData.get("is_active") === "on";
 
   const payload = {
     restaurant_id: restaurantId,
@@ -111,7 +118,7 @@ export async function saveBankAccount(formData) {
     account_name: accountName,
     account_number: accountNumber,
     branch,
-    qr_code_url: qrCodeUrl,
+    verify_et_provider: verifyEtProvider,
     is_active: isActive,
     updated_at: new Date().toISOString(),
   };
@@ -119,12 +126,36 @@ export async function saveBankAccount(formData) {
   const query = id
     ? supabase.from("payment_accounts").update(payload).eq("id", id).eq("restaurant_id", restaurantId)
     : supabase.from("payment_accounts").insert(payload);
-  const { error } = await query;
+  const { data: account, error } = await query
+    .select("id, restaurant_id, type, name, account_name, account_number, branch, verify_et_provider, is_active")
+    .maybeSingle();
 
   if (error) throw error;
+  if (!account) throw new Error("The payment account was not saved for this restaurant.");
 
   revalidatePath("/admin/settings");
-  return { message: id ? "Bank account updated." : "Bank account added." };
+  revalidatePath("/server");
+  return { message: id ? "Bank account updated." : "Bank account added.", account };
+}
+
+export async function getActivePaymentAccounts() {
+  const supabase = await createSupabaseServerClient();
+  const { user, membership } = await getAuthContext(supabase);
+
+  if (!user) throw new Error("You must be signed in.");
+  if (!membership || !["ADMIN", "OWNER", "MANAGER", "SERVER"].includes(membership.role)) {
+    throw new Error("You do not have permission to read payment accounts.");
+  }
+
+  const { data: accounts, error: accountsError } = await supabase
+    .from("payment_accounts")
+    .select("id, restaurant_id, type, name, account_name, account_number, branch, verify_et_provider, qr_code_url, is_active")
+    .eq("restaurant_id", membership.restaurant_id)
+    .eq("is_active", true)
+    .order("created_at", { ascending: false });
+
+  if (accountsError) throw accountsError;
+  return { accounts: accounts || [] };
 }
 
 export async function deleteBankAccount(formData) {

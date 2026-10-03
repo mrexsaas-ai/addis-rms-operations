@@ -1,58 +1,273 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { useLanguage } from "../i18n/LanguageProvider";
+import { MenuItemImage } from "../menu/MenuImageForm";
 import { createServerOrder } from "./actions";
-import { recordPayment } from "../orders/actions";
+import { updateTableStatus } from "../tables/actions";
+import { createPendingPayment, recordPayment, resolvePendingPayment } from "../orders/actions";
+import { getActivePaymentAccounts, saveBankAccount } from "../admin/settings/actions";
 
-const statusColors = {
-  AVAILABLE: "success",
-  OCCUPIED: "danger",
-  RESERVED: "warning",
-  CLEANING: "muted",
+const tableStatusClasses = {
+  AVAILABLE: "available",
+  OCCUPIED: "occupied",
+  RESERVED: "reserved",
+  CLEANING: "cleaning",
 };
 
 const defaultState = {
   success: false,
   error: "",
   orderId: null,
+  orderNumber: null,
+  orderTotal: null,
+  existingOrder: null,
 };
 
-async function submitOrder(prevState, formData) {
+async function submitOrder(previousState, formData) {
   try {
     const result = await createServerOrder(formData);
+    if (result?.existingOrder) {
+      return { ...defaultState, existingOrder: result.existingOrder };
+    }
+
     return {
       success: true,
       orderId: result?.orderId || null,
+      orderNumber: result?.orderNumber || null,
+      orderTotal: result?.orderTotal ?? null,
       error: "",
     };
   } catch (error) {
-    return {
-      success: false,
-      orderId: null,
-      error: error?.message || "Unable to create this order.",
-    };
+    return { ...defaultState, error: error?.message || "Unable to create this order." };
   }
 }
 
 function formatCurrency(value) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "ETB",
-    currencyDisplay: "code",
-  }).format(Number(value || 0));
+  return `ETB ${Number(value || 0).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
-export default function ServerPOSClient({ restaurantName, tables, categories, menuItems, paymentAccounts }) {
+function cartTotal(items) {
+  return items.reduce((total, item) => {
+    const price = Number(item.price);
+    return Number.isFinite(price) ? total + price * Number(item.quantity || 0) : Number.NaN;
+  }, 0);
+}
+
+function translateServerError(message, t) {
+  const errorKeys = {
+    "Unable to create this order.": "unableCreateOrder",
+    "Add at least one item to the cart.": "emptyCartError",
+    "Select a table for dine-in orders.": "selectTableError",
+  };
+  return errorKeys[message] ? t(errorKeys[message]) : message;
+}
+
+function isUsablePaymentAccount(account) {
+  return account?.is_active && String(account.account_number || "").trim();
+}
+
+function accountMatchesPaymentOption(account, option) {
+  if (!isUsablePaymentAccount(account)) return false;
+  const accountType = String(account.type || "").trim().toUpperCase();
+  if (option.key === "TELEBIRR") return accountType === "TELEBIRR" && account.verify_et_provider === "telebirr";
+  if (option.key === "CBE") return accountType === "BANK_TRANSFER" && account.verify_et_provider === "cbe";
+  if (option.key === "OTHER_BANK") return accountType === "BANK_TRANSFER" && account.verify_et_provider !== "cbe";
+  return false;
+}
+
+function paymentStatusLabel(status, t) {
+  if (status === "COMPLETED") return t("paid");
+  if (status === "PENDING") return "PENDING";
+  return status || t("unpaid");
+}
+
+function paymentActionError(error, t) {
+  if (error?.message === "An active payment already exists for this order.") {
+    return t("activePaymentExistsError");
+  }
+  return error?.message || t("unableRecordPayment");
+}
+
+export default function ServerPOSClient({ restaurantName, tables, categories, menuItems, enabledPaymentMethods = ["CASH"], canManagePaymentAccounts = false }) {
+  const { t } = useLanguage();
+  const router = useRouter();
+  const refreshedOrderId = useRef(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("ALL");
   const [orderType, setOrderType] = useState("DINE_IN");
   const [selectedTableId, setSelectedTableId] = useState(
-    tables.find((table) => ["AVAILABLE", "RESERVED"].includes(table.status))?.id || ""
+    tables.find((table) => table.status === "AVAILABLE")?.id || "",
   );
   const [notes, setNotes] = useState("");
   const [cart, setCart] = useState([]);
-  const [paymentMethod, setPaymentMethod] = useState("CASH");
   const [state, formAction, pending] = useActionState(submitOrder, defaultState);
+  const [paymentOpen, setPaymentOpen] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState("CASH");
+  const [cashReceived, setCashReceived] = useState("");
+  const [pendingPaymentId, setPendingPaymentId] = useState("");
+  const [pendingPaymentStatus, setPendingPaymentStatus] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
+  const [paymentError, setPaymentError] = useState("");
+  const [paymentMessage, setPaymentMessage] = useState("");
+  const [checkoutError, setCheckoutError] = useState("");
+  const [paymentPending, startPaymentTransition] = useTransition();
+  const [accountList, setAccountList] = useState([]);
+  const [selectedPaymentAccountId, setSelectedPaymentAccountId] = useState("");
+  const [accountFormOpen, setAccountFormOpen] = useState(false);
+  const [accountFormType, setAccountFormType] = useState("TELEBIRR");
+  const [accountToEdit, setAccountToEdit] = useState(null);
+  const [accountError, setAccountError] = useState("");
+  const [accountPending, startAccountTransition] = useTransition();
+
+  const paymentOptions = [
+    { key: "CASH", method: "CASH", label: t("cash") },
+    { key: "TELEBIRR", method: "TELEBIRR", label: t("telebirr") },
+    { key: "CBE", method: "BANK_TRANSFER", label: "CBE" },
+    { key: "OTHER_BANK", method: "BANK_TRANSFER", label: "OTHER BANK" },
+  ];
+  const availablePaymentMethods = paymentOptions.filter((option) =>
+    enabledPaymentMethods.includes(option.method) || enabledPaymentMethods.includes(option.key),
+  );
+  const selectedPaymentOption = availablePaymentMethods.find((option) => option.key === paymentMethod) || availablePaymentMethods[0] || paymentOptions[0];
+  const paymentAccountsForOption = accountList.filter((account) => accountMatchesPaymentOption(account, selectedPaymentOption));
+  const selectedPaymentAccount = paymentAccountsForOption.find((account) => account.id === selectedPaymentAccountId) || paymentAccountsForOption[0] || null;
+  const refreshActivePaymentAccounts = useCallback(() => {
+    startAccountTransition(async () => {
+      try {
+        const result = await getActivePaymentAccounts();
+        setAccountList(result.accounts);
+      } catch (error) {
+        setPaymentError(error?.message || "Unable to load payment accounts.");
+      }
+    });
+  }, []);
+
+  const openPayment = useCallback(() => {
+    setPaymentError("");
+    setPaymentMessage("");
+    setPendingPaymentId("");
+    setPendingPaymentStatus("");
+    setPaymentReference("");
+    setCashReceived("");
+    setSelectedPaymentAccountId("");
+    setPaymentOpen(true);
+    refreshActivePaymentAccounts();
+  }, [refreshActivePaymentAccounts]);
+
+  function openAccountForm(account = null, type = "TELEBIRR") {
+    setAccountError("");
+    setAccountToEdit(account);
+    setAccountFormType(account?.type === "BANK_TRANSFER" ? (account.verify_et_provider === "cbe" ? "CBE" : "OTHER_BANK") : type);
+    setAccountFormOpen(true);
+  }
+
+  function handleAccountSave(event) {
+    event.preventDefault();
+    if (accountFormType === "CASH") {
+      setAccountError("CASH does not require a payment account.");
+      return;
+    }
+    const formData = new FormData(event.currentTarget);
+    const type = accountFormType === "TELEBIRR" ? "TELEBIRR" : "BANK_TRANSFER";
+    formData.set("type", type);
+    formData.set("name", accountFormType === "TELEBIRR" ? "Telebirr" : accountFormType === "CBE" ? "CBE" : "Other Bank");
+    formData.set("verify_et_provider", accountFormType === "TELEBIRR"
+      ? "telebirr"
+      : accountFormType === "CBE"
+        ? "cbe"
+        : accountToEdit?.verify_et_provider || "");
+    formData.set("is_active", "on");
+    if (accountToEdit?.id) formData.set("id", accountToEdit.id);
+    setAccountError("");
+    startAccountTransition(async () => {
+      try {
+        const result = await saveBankAccount(formData);
+        setAccountList((current) => {
+          const withoutSaved = current.filter((account) => account.id !== result.account.id);
+          return [result.account, ...withoutSaved];
+        });
+        setSelectedPaymentAccountId(result.account.id);
+        setPaymentMethod(accountFormType === "TELEBIRR" ? "TELEBIRR" : accountFormType);
+        setAccountToEdit(null);
+        setAccountFormOpen(false);
+        setPaymentMessage(result.message);
+        router.refresh();
+      } catch (error) {
+        setAccountError(error?.message || "Unable to save this payment account.");
+      }
+    });
+  }
+
+  function handleCashPayment(event) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    setPaymentError("");
+    startPaymentTransition(async () => {
+      try {
+        const result = await recordPayment(formData);
+        setPendingPaymentStatus("COMPLETED");
+        setPaymentMessage(t("paymentConfirmed"));
+        router.push(`/receipts/${result?.orderId || state.orderId}`);
+      } catch (error) {
+        if (error?.message === "An active payment already exists for this order.") router.refresh();
+        setPaymentError(paymentActionError(error, t));
+      }
+    });
+  }
+
+  function handlePendingPayment(event) {
+    event.preventDefault();
+    if (!paymentReference.trim()) {
+      setPaymentError(t("referenceRequiredError"));
+      return;
+    }
+    const formData = new FormData(event.currentTarget);
+    formData.set("reference_number", paymentReference.trim());
+    setPaymentError("");
+    startPaymentTransition(async () => {
+      try {
+        const result = await createPendingPayment(formData);
+        setPendingPaymentId(result.paymentId);
+        setPendingPaymentStatus("PENDING");
+      } catch (error) {
+        if (error?.message === "An active payment already exists for this order.") router.refresh();
+        setPaymentError(paymentActionError(error, t));
+      }
+    });
+  }
+
+  function confirmPendingPayment() {
+    const formData = new FormData();
+    formData.set("payment_id", pendingPaymentId);
+    formData.set("decision", "COMPLETED");
+    formData.set("note", paymentReference.trim());
+    setPaymentError("");
+    startPaymentTransition(async () => {
+      try {
+        const result = await resolvePendingPayment(formData);
+        setPendingPaymentStatus("COMPLETED");
+        setPaymentMessage(result?.message || t("paymentConfirmed"));
+        router.push(`/receipts/${result?.orderId || state.orderId}`);
+      } catch (error) {
+        setPaymentError(paymentActionError(error, t));
+      }
+    });
+  }
+
+  useEffect(() => {
+    if (!state.success || !state.orderId || refreshedOrderId.current === state.orderId) return;
+    refreshedOrderId.current = state.orderId;
+    setCart([]);
+    setSelectedTableId("");
+    setNotes("");
+    openPayment();
+    router.refresh();
+  }, [openPayment, router, state.orderId, state.success]);
 
   function handleOrderTypeChange(nextOrderType) {
     setOrderType(nextOrderType);
@@ -60,612 +275,316 @@ export default function ServerPOSClient({ restaurantName, tables, categories, me
       setSelectedTableId("");
       return;
     }
-
-    const eligibleTables = (tables || []).filter((table) =>
-      ["AVAILABLE", "RESERVED"].includes(table.status)
-    );
-
-    setSelectedTableId(eligibleTables[0]?.id || "");
+    const eligibleTable = tables.find((table) => table.status === "AVAILABLE");
+    setSelectedTableId(eligibleTable?.id || "");
   }
 
   const categoryList = useMemo(
-    () => [{ id: "ALL", name: "All items" }, ...(categories || [])],
-    [categories]
+    () => [{ id: "ALL", name: t("allItems") }, ...(categories || [])],
+    [categories, t],
   );
-
+  const categoryNames = useMemo(
+    () => new Map((categories || []).map((category) => [category.id, category.name])),
+    [categories],
+  );
   const filteredItems = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-
     return (menuItems || []).filter((item) => {
-      const matchesCategory =
-        selectedCategory === "ALL" || item.category_id === selectedCategory;
-      const haystack = `${item.name} ${item.description || ""}`.toLowerCase();
-      const matchesSearch = !query || haystack.includes(query);
-      return matchesCategory && matchesSearch;
+      const matchesCategory = selectedCategory === "ALL" || item.category_id === selectedCategory;
+      const haystack = `${item.name} ${item.description || ""} ${item.station || ""}`.toLowerCase();
+      return matchesCategory && (!query || haystack.includes(query));
     });
   }, [menuItems, searchQuery, selectedCategory]);
-
-  const subtotal = cart.reduce(
-    (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
-    0
-  );
-
-  const availableTables = tables.filter((table) =>
-    ["AVAILABLE", "RESERVED"].includes(table.status)
-  );
+  const subtotal = cartTotal(cart);
+  const activeCartTotal = cart.length ? subtotal : 0;
+  const paymentTotal = state.orderTotal == null ? activeCartTotal : Number(state.orderTotal);
+  const cashChange = Math.max(Number(cashReceived || 0) - paymentTotal, 0);
+  const selectedTable = tables.find((table) => table.id === selectedTableId) || null;
+  const selectedTableRequired = orderType === "DINE_IN";
 
   function addItemToCart(item) {
+    const price = Number(item.price);
+    if (!Number.isFinite(price)) {
+      setCheckoutError(`Unable to add ${item.name}: its price is invalid.`);
+      return;
+    }
+    setCheckoutError("");
     setCart((current) => {
       const existing = current.find((entry) => entry.id === item.id);
       if (existing) {
         return current.map((entry) =>
-          entry.id === item.id
-            ? { ...entry, quantity: entry.quantity + 1 }
-            : entry
+          entry.id === item.id ? { ...entry, quantity: entry.quantity + 1 } : entry,
         );
       }
-      return [
-        ...current,
-        { id: item.id, name: item.name, price: Number(item.price), quantity: 1, station: item.station || "KITCHEN" },
-      ];
+      return [...current, {
+        id: item.id,
+        name: item.name,
+        price,
+        quantity: 1,
+        station: item.station || "KITCHEN",
+      }];
     });
   }
 
   function updateQuantity(itemId, nextQuantity) {
-    setCart((current) => {
-      if (nextQuantity <= 0) {
-        return current.filter((entry) => entry.id !== itemId);
-      }
-      return current.map((entry) =>
-        entry.id === itemId ? { ...entry, quantity: nextQuantity } : entry
-      );
-    });
+    setCheckoutError("");
+    setCart((current) => nextQuantity <= 0
+      ? current.filter((entry) => entry.id !== itemId)
+      : current.map((entry) => entry.id === itemId ? { ...entry, quantity: nextQuantity } : entry));
   }
 
-  const selectedTable = tables.find((table) => table.id === selectedTableId) || null;
-  const activeTableCount = tables.filter((table) => table.status === "AVAILABLE").length;
-  const occupiedTableCount = tables.filter((table) => table.status === "OCCUPIED").length;
+  function handleOrderSubmit(formData) {
+    if (!cart.length) {
+      setCheckoutError(t("emptyCartError"));
+      return;
+    }
+    const invalidItem = cart.find((item) => !Number.isFinite(Number(item.price)) || !Number.isInteger(item.quantity) || item.quantity < 1);
+    if (invalidItem) {
+      setCheckoutError(`${t("invalidItemError")} ${invalidItem.name}`);
+      return;
+    }
+    const total = cartTotal(cart);
+    if (!Number.isFinite(total) || total <= 0) {
+      setCheckoutError(t("invalidOrderTotalError"));
+      return;
+    }
+    setCheckoutError("");
+    formAction(formData);
+  }
 
   return (
-    <div className="server-page-shell">
+    <div className="server-pos-shell">
       <style>{`
-        .server-page-shell {
-          min-height: 100vh;
-          background: #0b0b0c;
-          color: #f5f5f5;
-          padding: 28px;
-        }
-        .server-layout {
-          max-width: 1440px;
-          margin: 0 auto;
-          display: grid;
-          grid-template-columns: 1.2fr 0.8fr;
-          gap: 20px;
-        }
-        .panel {
-          background: #111113;
-          border: 1px solid #2a2a2d;
-          border-radius: 18px;
-          padding: 20px;
-        }
-        .brand {
-          letter-spacing: 0.18em;
-          font-weight: 800;
-          font-size: 11px;
-          text-transform: uppercase;
-          color: #d8ff45;
-        }
-        .eyebrow {
-          margin: 0 0 8px;
-          font-size: 12px;
-          letter-spacing: 0.16em;
-          text-transform: uppercase;
-          opacity: 0.6;
-        }
-        .header-row {
-          display: flex;
-          justify-content: space-between;
-          align-items: end;
-          gap: 16px;
-          margin-bottom: 20px;
-        }
-        .header-row h1 {
-          margin: 0;
-          font-size: clamp(30px, 3vw, 46px);
-          letter-spacing: -0.05em;
-        }
-        .header-row p {
-          margin: 8px 0 0;
-          color: #a4a4a7;
-        }
-        .stats-grid {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 12px;
-          margin-bottom: 20px;
-        }
-        .stat-card {
-          background: #111113;
-          border: 1px solid #2a2a2d;
-          border-radius: 16px;
-          padding: 18px;
-        }
-        .stat-card span {
-          display: block;
-          color: #9aa0a8;
-          font-size: 12px;
-          margin-bottom: 8px;
-          text-transform: uppercase;
-          letter-spacing: 0.12em;
-        }
-        .stat-card strong {
-          font-size: 28px;
-          letter-spacing: -0.05em;
-        }
-        .toolbar {
-          display: flex;
-          gap: 12px;
-          flex-wrap: wrap;
-          margin-bottom: 18px;
-        }
-        .toolbar-field {
-          flex: 1;
-          min-width: 180px;
-        }
-        .toolbar-field input,
-        .toolbar-field select,
-        .toolbar-field textarea,
-        .server-form select,
-        .server-form input,
-        .server-form textarea {
-          width: 100%;
-          box-sizing: border-box;
-          border: 1px solid #303034;
-          background: #09090b;
-          color: #f5f5f5;
-          border-radius: 10px;
-          padding: 12px 14px;
-          font: inherit;
-        }
-        .toolbar-field label,
-        .server-form label {
-          display: block;
-          margin-bottom: 7px;
-          color: #a5a5a8;
-          font-size: 12px;
-          text-transform: uppercase;
-          letter-spacing: 0.12em;
-        }
-        .filter-row {
-          display: flex;
-          gap: 8px;
-          flex-wrap: wrap;
-          margin-bottom: 18px;
-        }
-        .filter-chip {
-          border: 1px solid #33343a;
-          background: transparent;
-          color: #d9d9dd;
-          border-radius: 999px;
-          padding: 8px 12px;
-          font-size: 12px;
-          cursor: pointer;
-        }
-        .filter-chip.active {
-          background: #d8ff45;
-          color: #101010;
-          border-color: #d8ff45;
-        }
-        .menu-grid {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 14px;
-        }
-        .menu-item {
-          background: #0d0d0f;
-          border: 1px solid #2a2a2d;
-          border-radius: 16px;
-          padding: 12px;
-          display: grid;
-          gap: 10px;
-        }
-        .item-image {
-          width: 100%;
-          height: 120px;
-          object-fit: cover;
-          border-radius: 10px;
-          background: #18181b;
-        }
-        .item-header {
-          display: flex;
-          justify-content: space-between;
-          gap: 12px;
-          align-items: center;
-        }
-        .item-header h3 {
-          margin: 0;
-          font-size: 16px;
-        }
-        .price-tag {
-          font-weight: 800;
-          color: #d8ff45;
-        }
-        .meta-row {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 8px;
-          color: #a5a5a8;
-          font-size: 12px;
-        }
-        .badge {
-          display: inline-flex;
-          padding: 5px 8px;
-          border-radius: 999px;
-          border: 1px solid #3b3b40;
-          font-weight: 700;
-          text-transform: uppercase;
-          font-size: 10px;
-          letter-spacing: 0.08em;
-        }
-        .badge.success { color: #7ade8b; border-color: rgba(122, 222, 139, 0.3); background: rgba(122, 222, 139, 0.12); }
-        .badge.warning { color: #f1c35d; border-color: rgba(241, 195, 93, 0.3); background: rgba(241, 195, 93, 0.12); }
-        .badge.danger { color: #ff7f7f; border-color: rgba(255, 127, 127, 0.3); background: rgba(255, 127, 127, 0.12); }
-        .badge.muted { color: #c7c7ca; border-color: rgba(199, 199, 202, 0.2); background: rgba(199, 199, 202, 0.08); }
-        .cta {
-          width: 100%;
-          border: 0;
-          border-radius: 10px;
-          padding: 10px 12px;
-          background: #d8ff45;
-          color: #111111;
-          font-weight: 800;
-          cursor: pointer;
-        }
-        .checkout-panel {
-          display: flex;
-          flex-direction: column;
-          gap: 16px;
-        }
-        .table-grid {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 10px;
-        }
-        .table-card {
-          background: #0d0d0f;
-          border: 1px solid #2b2b2d;
-          border-radius: 12px;
-          padding: 12px;
-          cursor: pointer;
-          transition: border-color 0.2s ease;
-        }
-        .table-card.selected {
-          border-color: #d8ff45;
-        }
-        .table-card strong {
-          display: block;
-          font-size: 20px;
-        }
-        .table-card small {
-          display: block;
-          color: #a6a6aa;
-         margin-top: 4px;
-        }
-        .cart-list {
-          display: grid;
-          gap: 12px;
-        }
-        .cart-row {
-          display: grid;
-          grid-template-columns: 1fr auto;
-          gap: 10px;
-          align-items: center;
-          padding: 12px 0;
-          border-bottom: 1px solid #2a2a2d;
-        }
-        .qty-control {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          border: 1px solid #323236;
-          border-radius: 999px;
-          background: #0a0a0b;
-        }
-        .qty-button {
-          width: 28px;
-          height: 28px;
-          border: 0;
-          border-radius: 50%;
-          background: #19191b;
-          color: #fff;
-          cursor: pointer;
-          font-size: 18px;
-        }
-        .totals {
-          display: grid;
-          gap: 8px;
-        }
-        .totals-row {
-          display: flex;
-          justify-content: space-between;
-          color: #d5d5d7;
-        }
-        .totals-row strong {
-          color: #f5f5f5;
-          font-size: 26px;
-        }
-        .server-form {
-          display: grid;
-          gap: 12px;
-        }
-        .server-form textarea {
-          min-height: 90px;
-          resize: vertical;
-        }
-        .submit-button {
-          border: 0;
-          border-radius: 10px;
-          background: #d8ff45;
-          color: #101010;
-          font-weight: 800;
-          padding: 12px 16px;
-          cursor: pointer;
-        }
-        @media (max-width: 980px) {
-          .server-layout { grid-template-columns: 1fr; }
-          .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-          .menu-grid { grid-template-columns: 1fr; }
-        }
+        .server-pos-shell { background: #08090b; color: #f8fafc; min-height: 100vh; overflow-x: hidden; padding: 28px clamp(16px, 3vw, 48px) 64px; }
+        .server-pos { margin: 0 auto; max-width: 1500px; }
+        .server-pos-header { align-items: end; display: flex; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
+        .server-pos-brand { color: #5ee7f2; font-size: 11px; font-weight: 800; letter-spacing: .2em; text-transform: uppercase; }
+        .server-pos-header h1 { font-size: clamp(30px, 4vw, 52px); letter-spacing: -.05em; margin: 8px 0; }
+        .server-pos-header p { color: #94a3b8; margin: 0; }
+        .server-pos-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(320px, .8fr); gap: 20px; }
+        .server-pos-panel { background: #111317; border: 1px solid #262b33; border-radius: 14px; box-shadow: 0 18px 45px rgba(0, 0, 0, .24); padding: 20px; }
+        .server-pos-panel h2 { font-size: 20px; letter-spacing: -.03em; margin: 0; }
+        .server-pos-section-heading { align-items: center; display: flex; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+        .server-pos-label { color: #94a3b8; display: block; font-size: 11px; font-weight: 700; letter-spacing: .1em; margin-bottom: 7px; text-transform: uppercase; }
+        .server-pos-input, .server-pos-textarea { background: #0b0d10; border: 1px solid #303742; border-radius: 8px; box-sizing: border-box; color: #f8fafc; font: inherit; min-height: 42px; padding: 10px 12px; width: 100%; }
+        .server-pos-input:focus, .server-pos-textarea:focus { border-color: #5ee7f2; outline: 2px solid rgba(94, 231, 242, .18); }
+        .server-pos-toolbar { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 12px; margin-bottom: 16px; }
+        .server-pos-filter-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+        .server-pos-filter { background: transparent; border: 1px solid #303742; border-radius: 999px; color: #cbd5e1; cursor: pointer; padding: 8px 13px; }
+        .server-pos-filter.active { background: #5ee7f2; border-color: #5ee7f2; color: #071014; font-weight: 800; }
+        .server-pos-menu { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+        .server-pos-menu-item { background: #0b0d10; border: 1px solid #252b33; border-radius: 11px; display: grid; gap: 12px; overflow: hidden; padding-bottom: 12px; }
+        .server-pos-menu-image { aspect-ratio: 16 / 10; background: #171b21; color: #64748b; display: grid; object-fit: cover; place-items: center; width: 100%; }
+        .server-pos-menu-body { display: grid; gap: 9px; padding: 0 12px; }
+        .server-pos-menu-title { align-items: start; display: flex; gap: 10px; justify-content: space-between; }
+        .server-pos-menu-title h3 { font-size: 15px; margin: 0; }
+        .server-pos-price { color: #5ee7f2; font-size: 13px; font-weight: 800; white-space: nowrap; }
+        .server-pos-meta { color: #94a3b8; display: flex; font-size: 11px; gap: 8px; }
+        .server-pos-station { color: #e2e8f0; font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+        .server-pos-add, .server-pos-submit { background: #5ee7f2; border: 0; border-radius: 8px; color: #071014; cursor: pointer; font-weight: 800; padding: 11px 13px; }
+        .server-pos-add:hover, .server-pos-submit:hover { background: #8af0f7; }
+        .server-pos-add { width: 100%; }
+        .server-pos-setup { display: grid; gap: 18px; }
+        .server-pos-order-types { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+        .server-pos-order-type { background: #0b0d10; border: 1px solid #303742; border-radius: 9px; color: #cbd5e1; cursor: pointer; font-size: 12px; font-weight: 800; min-height: 44px; padding: 10px 6px; transition: background .18s ease, border-color .18s ease, box-shadow .18s ease, color .18s ease; }
+        .server-pos-order-type:hover { background: #161c22 !important; border-color: #5ee7f2 !important; color: #f8fafc !important; }
+        .server-pos-order-type.active { background: rgba(94, 231, 242, .14) !important; border-color: #5ee7f2 !important; box-shadow: 0 0 18px rgba(94, 231, 242, .16); color: #f8fafc !important; }
+        .server-pos-table-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .server-pos-table-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+        .server-pos-shell button.server-pos-table { align-content: start; background: #0b0d10 !important; border: 1px solid #303742 !important; border-radius: 10px !important; color: #fff !important; cursor: pointer; display: grid; gap: 5px; min-height: 112px; opacity: 1 !important; padding: 12px; position: relative; text-align: left; transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease, background .18s ease; }
+        .server-pos-shell button.server-pos-table > strong, .server-pos-shell button.server-pos-table > .server-pos-table-name { color: #fff !important; -webkit-text-fill-color: #fff !important; }
+        .server-pos-shell .server-pos-table-check { color: #071014 !important; }
+        .server-pos-shell button.server-pos-table:disabled { cursor: not-allowed; filter: saturate(.72); opacity: .58 !important; }
+        .server-pos-shell button.server-pos-table.available { background: rgba(34, 197, 94, .18) !important; border-color: rgba(34, 197, 94, .9) !important; }
+        .server-pos-shell button.server-pos-table.occupied { background: rgba(239, 68, 68, .16) !important; border-color: rgba(239, 68, 68, .85) !important; }
+        .server-pos-shell button.server-pos-table.reserved { background: rgba(234, 179, 8, .16) !important; border-color: rgba(234, 179, 8, .9) !important; }
+        .server-pos-shell button.server-pos-table.cleaning { background: rgba(59, 130, 246, .16) !important; border-color: rgba(59, 130, 246, .9) !important; }
+        .server-pos-shell .server-pos-table:not(:disabled):hover { background: rgba(34, 197, 94, .26) !important; border-color: #4ade80 !important; color: #f8fafc !important; transform: translateY(-1px); }
+        .server-pos-shell .server-pos-table.available:disabled:hover { background: rgba(34, 197, 94, .18) !important; border-color: rgba(34, 197, 94, .9) !important; }
+        .server-pos-shell .server-pos-table.occupied:disabled:hover { background: rgba(239, 68, 68, .16) !important; border-color: rgba(239, 68, 68, .85) !important; }
+        .server-pos-shell .server-pos-table.reserved:disabled:hover { background: rgba(234, 179, 8, .16) !important; border-color: rgba(234, 179, 8, .9) !important; }
+        .server-pos-shell .server-pos-table.cleaning:disabled:hover { background: rgba(59, 130, 246, .16) !important; border-color: rgba(59, 130, 246, .9) !important; }
+        .server-pos-shell .server-pos-table:disabled:hover { color: #f8fafc !important; transform: none; }
+        .server-pos-shell .server-pos-table.selected, .server-pos-shell .server-pos-table.selected:hover { background: rgba(94, 231, 242, .2) !important; border: 2px solid #5ee7f2 !important; box-shadow: 0 0 0 2px rgba(94, 231, 242, .3), 0 0 22px rgba(94, 231, 242, .2); color: #f8fafc !important; padding: 11px; }
+        .server-pos-table-check { align-items: center; color: #071014; display: flex; font-size: 10px; font-weight: 900; height: 20px; justify-content: center; letter-spacing: .08em; min-width: 20px; }
+        .server-pos-table.selected .server-pos-table-check { background: #5ee7f2; border-radius: 999px; }
+        .server-pos-table strong, .server-pos-table span { display: block; }
+        .server-pos-table strong { font-size: 18px; }
+        .server-pos-table-name { color: #f8fafc; font-size: 12px; margin-top: 0; }
+        .server-pos-table-status { border: 1px solid; border-radius: 999px; font-size: 10px; font-weight: 800; justify-self: start; margin-top: 2px; padding: 4px 7px; text-transform: uppercase; }
+        .server-pos-shell .server-pos-table-status.available { background: rgba(34, 197, 94, .22) !important; border-color: #4ade80 !important; color: #bbf7d0 !important; }
+        .server-pos-shell .server-pos-table-status.occupied { background: rgba(239, 68, 68, .22) !important; border-color: #f87171 !important; color: #fecaca !important; }
+        .server-pos-shell .server-pos-table-status.reserved { background: rgba(234, 179, 8, .22) !important; border-color: #facc15 !important; color: #fef08a !important; }
+        .server-pos-shell .server-pos-table-status.cleaning { background: rgba(59, 130, 246, .22) !important; border-color: #60a5fa !important; color: #bfdbfe !important; }
+        .server-pos-selected-summary { display: grid; gap: 5px; margin: 12px 0 0; }
+        .server-pos-selected-summary strong { color: #f8fafc; font-size: 14px; }
+        .server-pos-selected-summary .server-pos-table-status { margin: 0; }
+        .server-pos-legend { color: #94a3b8; display: flex; flex-wrap: wrap; font-size: 11px; gap: 9px 12px; }
+        .server-pos-legend span::before { border-radius: 50%; content: ""; display: inline-block; height: 7px; margin-right: 5px; width: 7px; }
+        .server-pos-legend .available::before { background: #22c55e; } .server-pos-legend .occupied::before { background: #ef4444; } .server-pos-legend .reserved::before { background: #eab308; } .server-pos-legend .cleaning::before { background: #3b82f6; }
+        .server-pos-status-editor { display: grid; gap: 6px; margin-top: 7px; }
+        .server-pos-status-editor select, .server-pos-status-editor button { background: #0b0d10; border: 1px solid #303742; border-radius: 7px; color: #f8fafc; padding: 7px; }
+        .server-pos-status-editor button { cursor: pointer; }
+        .server-pos-cart { border-top: 1px solid #262b33; display: grid; gap: 12px; padding-top: 16px; }
+        .server-pos-cart-row { align-items: center; border-bottom: 1px solid #262b33; display: grid; gap: 10px; grid-template-columns: 1fr auto; padding-bottom: 12px; }
+        .server-pos-cart-row strong { font-size: 14px; }
+        .server-pos-cart-row small { color: #94a3b8; display: block; margin-top: 4px; }
+        .server-pos-quantity { align-items: center; display: flex; gap: 8px; }
+        .server-pos-quantity button, .server-pos-remove { background: #20252d; border: 0; border-radius: 6px; color: #f8fafc; cursor: pointer; height: 28px; width: 28px; }
+        .server-pos-remove { color: #fca5a5; font-size: 16px; }
+        .server-pos-totals { display: grid; gap: 8px; margin-top: 2px; }
+        .server-pos-total-row { align-items: center; color: #cbd5e1; display: flex; justify-content: space-between; }
+        .server-pos-total-row.total { border-top: 1px solid #303742; color: #f8fafc; font-size: 20px; font-weight: 900; padding-top: 14px; }
+        .server-pos-total-row.total strong { color: #5ee7f2; font-size: 24px; }
+        .server-pos-submit { font-size: 14px; margin-top: 2px; width: 100%; }
+        .server-pos-submit:disabled { cursor: not-allowed; opacity: .45; }
+        .server-pos-message { border-radius: 8px; font-size: 13px; padding: 10px 12px; }
+        .server-pos-message.error { background: rgba(239, 68, 68, .14); color: #fca5a5; }
+        .server-pos-message.success { background: rgba(34, 197, 94, .14); color: #86efac; }
+        .server-pos-payment { background: #0b0d10; border: 1px solid #303742; border-radius: 10px; display: grid; gap: 14px; padding: 16px; }
+        .server-pos-payment-heading { align-items: start; display: flex; justify-content: space-between; gap: 12px; }
+        .server-pos-payment-heading h3 { font-size: 16px; margin: 0; }
+        .server-pos-payment-close { background: transparent !important; border: 1px solid #303742 !important; border-radius: 7px; color: #cbd5e1 !important; cursor: pointer; padding: 6px 9px; }
+        .server-pos-payment-close:hover { background: #161c22 !important; border-color: #5ee7f2 !important; color: #fff !important; }
+        .server-pos-payment-summary { align-items: center; background: #11171b; border: 1px solid #262b33; border-radius: 8px; display: flex; justify-content: space-between; padding: 12px; }
+        .server-pos-payment-summary strong { color: #5ee7f2; font-size: 20px; }
+        .server-pos-payment-methods { display: flex; flex-wrap: wrap; gap: 7px; }
+        .server-pos-payment-method { background: #151a1f !important; border: 1px solid #303742 !important; border-radius: 7px; color: #cbd5e1 !important; cursor: pointer; padding: 9px 10px; }
+        .server-pos-payment-method.active { background: rgba(94, 231, 242, .14) !important; border-color: #5ee7f2 !important; color: #fff !important; }
+        .server-pos-payment-account { background: rgba(94, 231, 242, .06); border: 1px solid rgba(94, 231, 242, .35); border-radius: 8px; display: grid; gap: 5px; padding: 12px; }
+        .server-pos-payment-account strong { color: #f8fafc; }
+        .server-pos-payment-account span { color: #5ee7f2; font-size: 18px; font-weight: 800; overflow-wrap: anywhere; }
+        .server-pos-payment-form { display: grid; gap: 10px; }
+        .server-pos-payment-form label { color: #cbd5e1; display: grid; font-size: 12px; gap: 6px; }
+        .server-pos-payment-status { color: #cbd5e1; font-size: 12px; margin: 0; }
+        .server-pos-payment-status strong { color: #f8fafc; }
+        .server-pos-account-manager { border-top: 1px solid #262b33; display: grid; gap: 10px; padding-top: 14px; }
+        .server-pos-account-manager-heading { align-items: center; display: flex; justify-content: space-between; gap: 12px; }
+        .server-pos-account-manager-heading strong { color: #f8fafc; font-size: 13px; }
+        .server-pos-account-action { background: transparent !important; border: 1px solid #303742 !important; border-radius: 7px; color: #cbd5e1 !important; cursor: pointer; padding: 8px 10px; }
+        .server-pos-account-action:hover { background: #161c22 !important; border-color: #5ee7f2 !important; color: #fff !important; }
+        .server-pos-account-list { display: grid; gap: 7px; }
+        .server-pos-account-row { align-items: center; background: #11171b; border: 1px solid #262b33; border-radius: 7px; display: flex; justify-content: space-between; gap: 10px; padding: 9px 10px; }
+        .server-pos-account-row span { color: #94a3b8; font-size: 11px; }
+        .server-pos-account-row strong { color: #f8fafc; font-size: 12px; }
+        .server-pos-account-form { background: #11171b; border: 1px solid #303742; border-radius: 8px; display: grid; gap: 10px; padding: 12px; }
+        .server-pos-account-form label { color: #cbd5e1; display: grid; font-size: 11px; gap: 5px; }
+        .server-pos-account-form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        .server-pos-account-form-actions button { flex: 1; min-width: 110px; }
+        .server-pos-account-help { color: #94a3b8; font-size: 11px; margin: 0; }
+        .server-pos-account-selector { display: grid; gap: 6px; }
+        .server-pos-account-modal { align-items: center; background: rgba(0, 0, 0, .78); display: flex; inset: 0; justify-content: center; padding: 18px; position: fixed; z-index: 20; }
+        .server-pos-account-dialog { background: #111317; border: 1px solid #3c4652; border-radius: 14px; box-shadow: 0 24px 80px rgba(0, 0, 0, .55); max-width: 500px; padding: 22px; width: 100%; }
+        .server-pos-account-dialog-heading { align-items: start; display: flex; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+        .server-pos-account-dialog-heading h3 { font-size: 22px; margin: 0; }
+        .server-pos-account-dialog-heading p { color: #94a3b8; font-size: 12px; margin: 6px 0 0; }
+        .server-pos-account-dialog-close { background: transparent; border: 1px solid #303742; border-radius: 7px; color: #cbd5e1; cursor: pointer; font-size: 20px; line-height: 1; padding: 5px 9px; }
+        .server-pos-account-dialog-close:hover { border-color: #5ee7f2; color: #fff; }
+        .server-pos-account-dialog-form { display: grid; gap: 14px; }
+        .server-pos-account-dialog-form label { color: #cbd5e1; display: grid; font-size: 12px; font-weight: 700; gap: 7px; }
+        .server-pos-account-dialog-actions { display: flex; gap: 10px; margin-top: 4px; }
+        .server-pos-account-dialog-actions button { flex: 1; }
+        .server-pos-account-cancel { background: transparent; border: 1px solid #303742; border-radius: 8px; color: #cbd5e1; cursor: pointer; font-weight: 800; padding: 11px 13px; }
+        .server-pos-account-cancel:hover { border-color: #5ee7f2; color: #fff; }
+        @media (max-width: 560px) { .server-pos-account-dialog { padding: 18px; } .server-pos-account-dialog-actions { flex-direction: column-reverse; } }
+        @media (max-width: 980px) { .server-pos-grid { grid-template-columns: 1fr; } }
+        @media (max-width: 560px) { .server-pos-header { align-items: start; display: block; } .server-pos-toolbar { grid-template-columns: 1fr; } .server-pos-panel { padding: 15px; } .server-pos-order-types { grid-template-columns: 1fr; } .server-pos-table-grid { grid-template-columns: 1fr 1fr; } }
       `}</style>
 
-      <div className="server-layout">
-        <section className="panel">
-          <div className="header-row">
-            <div>
-              <div className="brand">ADDIS RMS</div>
-              <p className="eyebrow">SERVER POS</p>
-              <h1>{restaurantName}</h1>
-              <p>Fast service, real tables, live menu access.</p>
-            </div>
-          </div>
-
-          <div className="stats-grid">
-            <div className="stat-card">
-              <span>Tables</span>
-              <strong>{tables.length}</strong>
-            </div>
-            <div className="stat-card">
-              <span>Available</span>
-              <strong>{activeTableCount}</strong>
-            </div>
-            <div className="stat-card">
-              <span>Occupied</span>
-              <strong>{occupiedTableCount}</strong>
-            </div>
-            <div className="stat-card">
-              <span>Reserved</span>
-              <strong>{tables.filter((table) => table.status === "RESERVED").length}</strong>
-            </div>
-          </div>
-
-          <div className="toolbar">
-            <div className="toolbar-field">
-              <label htmlFor="search-items">Search</label>
-              <input
-                id="search-items"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search menu items"
-              />
-            </div>
-            <div className="toolbar-field">
-              <label htmlFor="queue-type">Order type</label>
-              <select
-                id="queue-type"
-                value={orderType}
-                onChange={(event) => handleOrderTypeChange(event.target.value)}
-              >
-                <option value="DINE_IN">Dine-in</option>
-                <option value="TAKEAWAY">Takeaway</option>
-                <option value="DELIVERY">Delivery</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="filter-row">
-            {categoryList.map((category) => (
-              <button
-                key={category.id}
-                type="button"
-                className={`filter-chip ${selectedCategory === category.id ? "active" : ""}`}
-                onClick={() => setSelectedCategory(category.id)}
-              >
-                {category.name}
-              </button>
-            ))}
-          </div>
-
-          <div className="menu-grid">
-            {filteredItems.map((item) => (
-              <article className="menu-item" key={item.id}>
-                {item.image_url ? (
-                  <img className="item-image" src={item.image_url} alt={item.name} />
-                ) : (
-                  <div className="item-image" style={{ display: "grid", placeItems: "center", color: "#9ca3af" }}>
-                    No image
-                  </div>
-                )}
-                <div className="item-header">
-                  <h3>{item.name}</h3>
-                  <span className="price-tag">{formatCurrency(item.price)}</span>
-                </div>
-                <div className="meta-row">
-                  <span>{item.station || "KITCHEN"}</span>
-                  <span className="badge success">Available</span>
-                </div>
-                <p style={{ margin: 0, color: "#b6b6ba", minHeight: "42px" }}>
-                  {item.description || "Freshly prepared item."}
-                </p>
-                <button type="button" className="cta" onClick={() => addItemToCart(item)}>
-                  Add to cart
-                </button>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <aside className="panel checkout-panel">
+      <div className="server-pos">
+        <header className="server-pos-header">
           <div>
-            <p className="eyebrow">Order setup</p>
-            <h2 style={{ margin: "0 0 16px" }}>Checkout</h2>
+            <div className="server-pos-brand">ADDIS RMS / V10</div>
+            <h1>{restaurantName}</h1>
+            <p>{t("createOrderDescription")}</p>
           </div>
+          <div className="server-pos-brand">{t("serverPos")}</div>
+        </header>
 
-          <div className="table-grid">
-            {tables.map((table) => {
-              const isSelected = selectedTableId === table.id;
-              const disabled = orderType !== "DINE_IN" || !["AVAILABLE", "RESERVED"].includes(table.status);
-              return (
-                <button
-                  key={table.id}
-                  type="button"
-                  className={`table-card ${isSelected ? "selected" : ""}`}
-                  onClick={() => {
-                    if (!disabled) setSelectedTableId(table.id);
-                  }}
-                  style={{ opacity: disabled ? 0.55 : 1, cursor: disabled ? "not-allowed" : "pointer" }}
-                >
-                  <strong>#{table.table_number}</strong>
-                  <small>{table.name || "Table"}</small>
-                  <span className={`badge ${statusColors[table.status] || "muted"}`} style={{ marginTop: 10 }}>
-                    {table.status}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          <form className="server-form" action={formAction}>
-            <input type="hidden" name="items" value={JSON.stringify(cart)} />
-            <input type="hidden" name="order_type" value={orderType} />
-            <input type="hidden" name="table_id" value={orderType === "DINE_IN" ? selectedTableId : ""} />
-
-            <div>
-              <label htmlFor="selected-order-type">Current order type</label>
-              <select
-                id="selected-order-type"
-                value={orderType}
-                onChange={(event) => handleOrderTypeChange(event.target.value)}
-              >
-                <option value="DINE_IN">Dine-in</option>
-                <option value="TAKEAWAY">Takeaway</option>
-                <option value="DELIVERY">Delivery</option>
-              </select>
+        <div className="server-pos-grid">
+          <section className="server-pos-panel">
+            <div className="server-pos-section-heading"><h2>{t("menu")}</h2><span className="server-pos-brand">{filteredItems.length} {t("items")}</span></div>
+            <div className="server-pos-toolbar">
+              <label><span className="server-pos-label">{t("search")}</span><input className="server-pos-input" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder={t("searchMenuItems")} /></label>
+              <div><span className="server-pos-label">{t("tables")}</span><div className="server-pos-legend"><span className="available">{t("available")}</span><span className="occupied">{t("occupied")}</span><span className="reserved">{t("reserved")}</span><span className="cleaning">{t("cleaning")}</span></div></div>
             </div>
-
-            <div>
-              <label htmlFor="selected-table">Selected table</label>
-              <input
-                id="selected-table"
-                readOnly
-                value={
-                  orderType === "DINE_IN"
-                    ? selectedTable
-                      ? `Table #${selectedTable.table_number}${selectedTable.name ? ` - ${selectedTable.name}` : ""}`
-                      : "No eligible table selected"
-                    : "Not required for takeaway or delivery"
-                }
-              />
-            </div>
-
-            <div>
-              <label htmlFor="notes">Notes</label>
-              <textarea
-                id="notes"
-                name="notes"
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-                placeholder="Guest notes or delivery details"
-              />
-            </div>
-
-            <div className="cart-list">
-              {cart.length === 0 ? (
-                <p style={{ color: "#a6a6aa", margin: 0 }}>Cart is empty. Add menu items to begin.</p>
-              ) : (
-                cart.map((item) => (
-                  <div key={item.id} className="cart-row">
-                    <div>
-                      <strong>{item.name}</strong>
-                      <div className="meta-row">
-                        <span>{formatCurrency(item.price)}</span>
-                        <span>{item.station}</span>
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <div className="qty-control">
-                        <button type="button" className="qty-button" onClick={() => updateQuantity(item.id, item.quantity - 1)}>
-                          −
-                        </button>
-                        <span>{item.quantity}</span>
-                        <button type="button" className="qty-button" onClick={() => updateQuantity(item.id, item.quantity + 1)}>
-                          +
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div className="totals">
-              <div className="totals-row">
-                <span>Subtotal</span>
-                <strong>{formatCurrency(subtotal)}</strong>
-              </div>
-            </div>
-
-            {state.error ? (
-              <div className="badge danger" style={{ width: "fit-content", padding: "8px 12px", color: "#ffb4b4" }}>
-                {state.error}
-              </div>
-            ) : null}
-
-            <button type="submit" className="submit-button" disabled={pending || cart.length === 0}>
-              {pending ? "Creating order..." : "Confirm order"}
-            </button>
-          </form>
-
-          {state.success && state.orderId ? (
-              <div style={{ display: "grid", gap: 10 }}>
-                <div className="badge success" style={{ width: "fit-content", padding: "8px 12px", color: "#b7f7c3" }}>
-                  Order created successfully. Total due: {formatCurrency(subtotal)}
+            <div className="server-pos-filter-list">{categoryList.map((category) => <button type="button" key={category.id} className={`server-pos-filter ${selectedCategory === category.id ? "active" : ""}`} onClick={() => setSelectedCategory(category.id)}>{category.name}</button>)}</div>
+            <div className="server-pos-menu">
+              {filteredItems.map((item) => <article className="server-pos-menu-item" key={item.id}>
+                <MenuItemImage
+                  src={item.image_url}
+                  alt={item.name}
+                  imageClassName="server-pos-menu-image"
+                  fallbackClassName="server-pos-menu-image"
+                />
+                <div className="server-pos-menu-body">
+                  <div className="server-pos-menu-title"><h3>{item.name}</h3><span className="server-pos-price">{formatCurrency(item.price)}</span></div>
+                  <div className="server-pos-meta"><span>{categoryNames.get(item.category_id) || t("menu")}</span><span>•</span><span className="server-pos-station">{item.station === "BAR" ? t("bar") : t("kitchen")}</span></div>
+                  <button type="button" className="server-pos-add" onClick={() => addItemToCart(item)}>{t("addToCart")}</button>
                 </div>
-                <form className="server-form" action={recordPayment}>
+              </article>)}
+              {!filteredItems.length && <p>{t("noMenuItems")}</p>}
+            </div>
+          </section>
+
+          <aside className="server-pos-panel">
+            <div className="server-pos-section-heading"><h2>{t("newOrder")}</h2><span className="server-pos-brand">{cart.length} {t("items")}</span></div>
+            <div className="server-pos-setup">
+              <div><span className="server-pos-label">{t("orderType")}</span><div className="server-pos-order-types">{[["DINE_IN", t("dineIn")], ["TAKEAWAY", t("takeaway")], ["DELIVERY", t("delivery")]].map(([value, label]) => <button type="button" key={value} className={`server-pos-order-type ${orderType === value ? "active" : ""}`} onClick={() => handleOrderTypeChange(value)}>{label}</button>)}</div></div>
+              {selectedTableRequired && <div>
+                <span className="server-pos-label">{t("selectTable")}</span>
+                <div className="server-pos-table-grid">{tables.map((table) => {
+                  const disabled = !selectedTableRequired || table.status !== "AVAILABLE";
+                  return <div key={table.id}>
+                    {table.status === "AVAILABLE" && <form action={updateTableStatus} className="server-pos-status-editor"><input type="hidden" name="id" value={table.id} /><label className="sr-only" htmlFor={`server-status-${table.id}`}>{t("tableStatus")}</label><select id={`server-status-${table.id}`} name="status" defaultValue="CLEANING"><option value="CLEANING">{t("cleaningStatus")}</option></select><button type="submit">{t("save")}</button></form>}
+                    <button type="button" disabled={disabled} aria-pressed={selectedTableId === table.id} className={`server-pos-table ${tableStatusClasses[table.status] || ""} ${selectedTableId === table.id ? "selected" : ""}`} onClick={() => setSelectedTableId(table.id)}><span className="server-pos-table-check" aria-hidden="true">{selectedTableId === table.id ? "✓" : ""}</span><strong>#{table.table_number}</strong><span className="server-pos-table-name">{table.name || t("table")}</span><span className={`server-pos-table-status ${tableStatusClasses[table.status] || ""}`}>{t(`${table.status.toLowerCase()}Status`)}</span></button>
+                    {["OCCUPIED", "CLEANING"].includes(table.status) && <form action={updateTableStatus} className="server-pos-status-editor"><input type="hidden" name="id" value={table.id} /><label className="sr-only" htmlFor={`server-status-${table.id}`}>{t("tableStatus")}</label><select id={`server-status-${table.id}`} name="status" defaultValue="AVAILABLE"><option value="AVAILABLE">{t("availableStatus")}</option></select><button type="submit">{t("save")}</button></form>}
+                  </div>;
+                })}</div>
+                {selectedTableRequired && selectedTable ? <div className="server-pos-selected-summary"><span className="server-pos-label">{t("selectedTable")}</span><strong>#{selectedTable.table_number} · {selectedTable.name || t("table")}</strong><span className={`server-pos-table-status ${tableStatusClasses[selectedTable.status] || ""}`}>{t(`${selectedTable.status.toLowerCase()}Status`)}</span></div> : <p className="server-pos-meta">{selectedTableRequired ? t("noEligibleTable") : t("notRequiredTable")}</p>}
+              </div>}
+              <form action={handleOrderSubmit}>
+                <input type="hidden" name="items" value={JSON.stringify(cart)} />
+                <input type="hidden" name="order_type" value={orderType} />
+                <input type="hidden" name="table_id" value={selectedTableRequired ? selectedTableId : ""} />
+                <div className="server-pos-cart">
+                {cart.length ? cart.map((item) => <div className="server-pos-cart-row" key={item.id}><div><strong>{item.name}</strong><small className="server-pos-station">{item.station === "BAR" ? t("bar") : t("kitchen")} · {formatCurrency(item.price)}</small></div><div className="server-pos-quantity"><button type="button" aria-label={`${t("decrease")} ${item.name}`} onClick={() => updateQuantity(item.id, item.quantity - 1)}>-</button><span>{item.quantity}</span><button type="button" aria-label={`${t("increase")} ${item.name}`} onClick={() => updateQuantity(item.id, item.quantity + 1)}>+</button><button type="button" className="server-pos-remove" aria-label={`${t("remove")} ${item.name}`} onClick={() => updateQuantity(item.id, 0)}>x</button></div></div>) : <p className="server-pos-meta">{t("cartEmpty")}</p>}
+                </div>
+                <label><span className="server-pos-label">{t("notes")}</span><textarea className="server-pos-textarea" name="notes" rows="3" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder={t("guestNotes")} /></label>
+                <div className="server-pos-totals"><div className="server-pos-total-row"><span>{t("subtotal")}</span><strong>{formatCurrency(activeCartTotal)}</strong></div><div className="server-pos-total-row total"><span>{t("total")}</span><strong>{formatCurrency(activeCartTotal)}</strong></div></div>
+                {state.error && <div className="server-pos-message error" role="alert">{translateServerError(state.error, t)}</div>}
+                {checkoutError && <div className="server-pos-message error" role="alert">{checkoutError}</div>}
+                {state.existingOrder && <div className="server-pos-message error" role="alert"><p>{t("serverExistingOrderNotSubmitted").replace("{orderNumber}", state.existingOrder.order_number).replace("{amount}", formatCurrency(state.existingOrder.total))}</p><a href="/orders" target="_blank" rel="noreferrer">{t("orders")}</a></div>}
+                {state.success && <div className="server-pos-message success" role="status">{t("orderCreatedDue")} {formatCurrency(state.orderTotal)}</div>}
+                <button type="submit" className="server-pos-submit" disabled={pending || !cart.length || (selectedTableRequired && !selectedTableId)}>{pending ? t("creatingOrder") : t("createOrder")}</button>
+              </form>
+              {state.success && state.orderId && paymentOpen && <section className="server-pos-payment" aria-labelledby="server-payment-title">
+                <div className="server-pos-payment-heading"><div><span className="server-pos-label">{t("payment")}</span><h3 id="server-payment-title">{t("completePayment")}</h3></div><button type="button" className="server-pos-payment-close" onClick={() => setPaymentOpen(false)}>{t("close")}</button></div>
+                <div className="server-pos-payment-summary"><span>{t("orderNumber")}: {state.orderNumber || state.orderId}<br />{t("orderTotal")}</span><strong>{formatCurrency(paymentTotal)}</strong></div>
+                <div className="server-pos-payment-methods">{availablePaymentMethods.map((option) => <button type="button" key={option.key} className={`server-pos-payment-method ${selectedPaymentOption.key === option.key ? "active" : ""}`} onClick={() => { setPaymentMethod(option.key); setSelectedPaymentAccountId(""); setPaymentError(""); setPendingPaymentId(""); setPendingPaymentStatus(""); setPaymentReference(""); refreshActivePaymentAccounts(); }}>{option.label}</button>)}</div>
+                {canManagePaymentAccounts && <div className="server-pos-account-manager"><div className="server-pos-account-manager-heading"><strong>Manage Payment Accounts</strong><button type="button" className="server-pos-account-action" onClick={() => openAccountForm(null, selectedPaymentOption.key === "CASH" ? "TELEBIRR" : selectedPaymentOption.key)}>+ Add Account</button></div>{accountList.filter(isUsablePaymentAccount).map((account) => <div className="server-pos-account-row" key={account.id}><span>{account.name} · {account.account_number}</span><button type="button" className="server-pos-account-action" onClick={() => openAccountForm(account)}>Edit</button></div>)}</div>}
+                {accountFormOpen && canManagePaymentAccounts && <div className="server-pos-account-modal" role="presentation"><div className="server-pos-account-dialog" role="dialog" aria-modal="true" aria-labelledby="server-account-dialog-title"><div className="server-pos-account-dialog-heading"><div><h3 id="server-account-dialog-title">{accountToEdit ? "Edit Payment Account" : "Add Payment Account"}</h3><p>Choose an account type and enter the details shown during payment.</p></div><button type="button" className="server-pos-account-dialog-close" aria-label="Close account dialog" onClick={() => { setAccountFormOpen(false); setAccountToEdit(null); setAccountError(""); }}>&times;</button></div><form className="server-pos-account-dialog-form" onSubmit={handleAccountSave}><label>Account type<select className="server-pos-input" value={accountFormType} onChange={(event) => setAccountFormType(event.target.value)}><option value="TELEBIRR">Telebirr</option><option value="CBE">CBE</option><option value="OTHER_BANK">Other Bank</option></select></label><label>Account Name<input className="server-pos-input" name="account_name" defaultValue={accountToEdit?.account_name || ""} required maxLength={160} /></label><label>Account Number<input className="server-pos-input" name="account_number" defaultValue={accountToEdit?.account_number || ""} required maxLength={80} /></label><p className="server-pos-account-help">CASH remains the existing cash payment flow and does not need an account.</p>{accountError && <div className="server-pos-message error" role="alert">{accountError}</div>}<div className="server-pos-account-dialog-actions"><button type="button" className="server-pos-account-cancel" onClick={() => { setAccountFormOpen(false); setAccountToEdit(null); setAccountError(""); }} disabled={accountPending}>Cancel</button><button type="submit" className="server-pos-submit" disabled={accountPending}>{accountPending ? "Saving..." : "Save"}</button></div></form></div></div>}
+                {selectedPaymentOption.key === "CASH" ? <form className="server-pos-payment-form" onSubmit={handleCashPayment}>
                   <input type="hidden" name="order_id" value={state.orderId} />
-                  <input type="hidden" name="amount" value={subtotal} />
-                  <label>Payment method
-                    <select name="method" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}>
-                      <option value="CASH">Cash</option>
-                      <option value="TELEBIRR">Telebirr</option>
-                      <option value="BANK_TRANSFER">CBE / Bank transfer</option>
-                    </select>
-                  </label>
-                  {paymentMethod === "CASH" ? (
-                    <label>Cash received
-                      <input name="cash_received" type="number" min={subtotal} step="0.01" required />
-                    </label>
-                  ) : (
-                    <>
-                      <p>{paymentAccounts.find((account) => account.type === (paymentMethod === "TELEBIRR" ? "TELEBIRR" : "BANK_TRANSFER"))?.name || "No configured account"}: {paymentAccounts.find((account) => account.type === (paymentMethod === "TELEBIRR" ? "TELEBIRR" : "BANK_TRANSFER"))?.account_name || "Configure an account in Settings."}</p>
-                      <input name="reference_number" placeholder="Transaction reference" required />
-                    </>
-                  )}
-                  <button type="submit" className="submit-button">Record payment</button>
-                </form>
-              </div>
-            ) : null}
-        </aside>
+                  <input type="hidden" name="amount" value={paymentTotal} />
+                  <input type="hidden" name="method" value="CASH" />
+                  <label>{t("cashReceived")}<input className="server-pos-input" name="cash_received" type="number" min={paymentTotal} step="0.01" value={cashReceived} onChange={(event) => setCashReceived(event.target.value)} required /></label>
+                  <label>{t("changeAmount")}<input className="server-pos-input" value={formatCurrency(cashChange)} readOnly /></label>
+                  <button type="submit" className="server-pos-submit" disabled={paymentPending}>{paymentPending ? t("recordingPayment") : t("confirmPayment")}</button>
+                </form> : <>
+                  {paymentAccountsForOption.length > 1 && <label className="server-pos-account-selector">Select account<select className="server-pos-input" value={selectedPaymentAccount?.id || ""} onChange={(event) => setSelectedPaymentAccountId(event.target.value)}>{paymentAccountsForOption.map((account) => <option value={account.id} key={account.id}>{account.name} · {account.account_number}</option>)}</select></label>}
+                  <div className="server-pos-payment-account"><strong>{selectedPaymentOption.key === "TELEBIRR" ? t("payToTelebirr") : `Pay to ${selectedPaymentOption.label}`}</strong>{selectedPaymentAccount ? <><span>{selectedPaymentAccount.account_number}</span>{selectedPaymentAccount.account_name && <small>{selectedPaymentAccount.account_name}</small>}</> : accountPending ? <span>{t("loadingPaymentAccount")}</span> : <><span>{selectedPaymentOption.label} {t("accountNotConfigured")}</span>{!canManagePaymentAccounts && <small>{t("configureAccount")}</small>}</>}</div>
+                  {!selectedPaymentAccount && canManagePaymentAccounts && <button type="button" className="server-pos-account-action" onClick={() => openAccountForm(null, selectedPaymentOption.key)}>+ Add {selectedPaymentOption.label} Account</button>}
+                  <label className="server-pos-account-selector"><span>{t("transactionReference")}</span><input className="server-pos-input" value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} required /></label>
+                  {!pendingPaymentId ? <form className="server-pos-payment-form" onSubmit={handlePendingPayment}><input type="hidden" name="order_id" value={state.orderId} /><input type="hidden" name="method" value={selectedPaymentOption.method} /><input type="hidden" name="account_id" value={selectedPaymentAccount?.id || ""} /><button type="submit" className="server-pos-submit" disabled={paymentPending || !selectedPaymentAccount || !paymentReference.trim()}>{paymentPending ? t("creatingPayment") : t("customerPaid")}</button></form> : <button type="button" className="server-pos-submit" onClick={confirmPendingPayment} disabled={paymentPending || pendingPaymentStatus === "COMPLETED" || !paymentReference.trim()}>{paymentPending ? t("confirmingPayment") : t("markAsPaid")}</button>}
+                </>}
+                <p className="server-pos-payment-status">{t("paymentStatus")}: <strong>{paymentStatusLabel(pendingPaymentStatus, t)}</strong></p>
+                {paymentError && <div className="server-pos-message error" role="alert">{paymentError}</div>}
+                {paymentMessage && <div className="server-pos-message success" role="status">{paymentMessage}</div>}
+              </section>}
+            </div>
+          </aside>
+        </div>
       </div>
     </div>
   );

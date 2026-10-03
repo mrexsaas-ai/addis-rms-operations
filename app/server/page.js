@@ -2,6 +2,11 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { SERVICE_ROLES, getAuthContext } from "@/lib/auth";
 import ServerPOSClient from "./ServerPOSClient";
+import ServerAttendance from "./ServerAttendance";
+import { getCurrentUserAttendanceShift } from "../staff/actions";
+import { signMenuImages } from "@/lib/menu-images";
+import MenuItemsLiveRefresh from "../MenuItemsLiveRefresh";
+import ServerOrderCompletionAlerts from "../ServerOrderCompletionAlerts";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +16,8 @@ export default async function ServerPage() {
 
   if (!user) redirect("/login");
   if (!membership || !SERVICE_ROLES.includes(membership.role)) redirect("/");
+
+  const shift = await getCurrentUserAttendanceShift();
 
   const results = await Promise.all([
     supabase
@@ -30,17 +37,17 @@ export default async function ServerPage() {
       .eq("is_available", true)
       .order("name", { ascending: true }),
     supabase
-      .from("payment_accounts")
-      .select("id, type, name, account_name, account_number, branch, is_active")
+      .from("restaurant_settings")
+      .select("enabled_payment_methods")
       .eq("restaurant_id", membership.restaurant_id)
-      .eq("is_active", true)
-      .order("created_at", { ascending: false }),
+      .maybeSingle(),
   ]);
 
   const queryError = results.find((result) => result.error)?.error;
   if (queryError) throw queryError;
 
-  const [{ data: tables }, { data: categories }, { data: menuItems }, { data: paymentAccounts }] = results;
+  const [{ data: tables }, { data: categories }, { data: rawMenuItems }, { data: settings }] = results;
+  const menuItems = await signMenuImages(supabase, rawMenuItems || []);
 
   const restaurant = Array.isArray(membership.restaurants)
     ? membership.restaurants[0]
@@ -48,12 +55,16 @@ export default async function ServerPage() {
 
   return (
     <main className="workspace-page">
+      <MenuItemsLiveRefresh restaurantId={membership.restaurant_id} />
+      <ServerOrderCompletionAlerts restaurantId={membership.restaurant_id} />
+      <ServerAttendance shift={shift} />
       <ServerPOSClient
         restaurantName={restaurant?.name || "Restaurant"}
         tables={tables || []}
         categories={categories || []}
         menuItems={menuItems || []}
-        paymentAccounts={paymentAccounts || []}
+        enabledPaymentMethods={settings?.enabled_payment_methods || ["CASH"]}
+        canManagePaymentAccounts={["ADMIN", "OWNER"].includes(membership.role)}
       />
     </main>
   );

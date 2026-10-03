@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { assertActiveRestaurantMembership, getAuthContext } from "@/lib/auth";
+import { getSignedMenuImageUrl, getStoragePath, removeMenuImage, uploadMenuImage } from "@/lib/menu-images";
 
 const managerRoles = ["ADMIN", "OWNER", "MANAGER"];
 
@@ -18,13 +20,13 @@ async function getMembership() {
 
   const { data: membership, error } = await supabase
     .from("restaurant_users")
-    .select("restaurant_id, role")
+    .select("restaurant_id, role, restaurants(status)")
     .eq("user_id", user.id)
     .limit(1)
     .maybeSingle();
 
   if (error) throw error;
-  if (!membership) throw new Error("Restaurant membership not found.");
+  assertActiveRestaurantMembership(membership);
 
   return { supabase, membership };
 }
@@ -41,32 +43,35 @@ function validateImage(file) {
   }
 }
 
-async function uploadMenuImage(supabase, restaurantId, file) {
+async function uploadImage(supabase, restaurantId, file) {
   validateImage(file);
 
   if (!file || file.size === 0) return null;
+  return uploadMenuImage(supabase, restaurantId, file);
+}
 
-  const extension = file.name.toLowerCase().endsWith(".jpeg")
-    ? "jpeg"
-    : "jpg";
+export async function refreshMenuImageUrl(value) {
+  const supabase = await createSupabaseServerClient();
+  const { user, membership } = await getAuthContext(supabase);
 
-  const path = `${restaurantId}/${crypto.randomUUID()}.${extension}`;
+  if (!user) throw new Error("You must be signed in.");
+  if (!membership) throw new Error("Restaurant membership not found.");
 
-  const { error } = await supabase.storage
-    .from("menu-images")
-    .upload(path, file, {
-      contentType: "image/jpeg",
-      cacheControl: "3600",
-      upsert: false,
-    });
+  const path = getStoragePath(value);
+  if (!path || !path.startsWith(`${membership.restaurant_id}/`)) {
+    throw new Error("Menu image does not belong to this restaurant.");
+  }
 
-  if (error) throw error;
+  return getSignedMenuImageUrl(supabase, path);
+}
 
-  const { data } = supabase.storage
-    .from("menu-images")
-    .getPublicUrl(path);
-
-  return data.publicUrl;
+async function discardFailedUpload(supabase, path) {
+  if (!path) return;
+  try {
+    await removeMenuImage(supabase, path);
+  } catch (error) {
+    console.error("MENU IMAGE CLEANUP ERROR:", error);
+  }
 }
 
 export async function createCategory(formData) {
@@ -111,7 +116,7 @@ export async function createMenuItem(formData) {
   }
   if (!["KITCHEN", "BAR"].includes(station)) throw new Error("Choose a valid preparation station.");
 
-  const imageUrl = await uploadMenuImage(
+  const imageUrl = await uploadImage(
     supabase,
     membership.restaurant_id,
     image
@@ -128,7 +133,10 @@ export async function createMenuItem(formData) {
     is_available: true,
   });
 
-  if (error) throw error;
+  if (error) {
+    await discardFailedUpload(supabase, imageUrl);
+    throw error;
+  }
 
   revalidatePath("/menu");
   revalidatePath("/");
@@ -170,14 +178,14 @@ export async function updateMenuItem(formData) {
   imageUrl = existing.image_url;
 
   if (image && image.size > 0) {
-    imageUrl = await uploadMenuImage(
+    imageUrl = await uploadImage(
       supabase,
       membership.restaurant_id,
       image
     );
   }
 
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from("menu_items")
     .update({
       name,
@@ -190,9 +198,14 @@ export async function updateMenuItem(formData) {
       updated_at: new Date().toISOString(),
     })
     .eq("id", id)
-    .eq("restaurant_id", membership.restaurant_id);
+    .eq("restaurant_id", membership.restaurant_id)
+    .select("id")
+    .maybeSingle();
 
-  if (error) throw error;
+  if (error || !updated) {
+    await discardFailedUpload(supabase, image && image.size > 0 ? imageUrl : null);
+    throw error || new Error("Menu item was not updated.");
+  }
 
   revalidatePath("/menu");
   revalidatePath("/");

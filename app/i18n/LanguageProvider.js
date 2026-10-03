@@ -453,6 +453,8 @@ const uiTranslations = {
   freshlyPrepared: { en: "Freshly prepared item.", am: "አዲስ የተዘጋጀ እቃ።", om: "Meeshaa haaraa qophaa'e.", ti: "ሓድሽ ዝተዳለወ እቃ።" },
   noImage: { en: "No image", am: "ምስል የለም", om: "Suura hin jiru", ti: "ስእሊ የለን" },
   imageUnavailable: { en: "Image unavailable", am: "ምስሉ አይገኝም", om: "Suuraan hin argamu", ti: "ምስሉ ኣይርከብን" },
+  imageRetry: { en: "Retry", am: "እንደገና ይሞክሩ", om: "Irra deebi'ii yaali", ti: "እንደገና ፈትን" },
+  imageRetrying: { en: "Retrying...", am: "እንደገና በመሞከር ላይ...", om: "Irra deebi'anii yaalaa jiru...", ti: "እንደገና ይፍትኑ ኣለዉ..." },
   addToCart: { en: "Add to cart", am: "ወደ ጋሪ ጨምር", om: "Gara gaarii dabali", ti: "ናብ ጋሪ ወስኽ" },
   orderType: { en: "Order type", am: "የትዕዛዝ አይነት", om: "Gosa ajajaa", ti: "ዓይነት ትእዛዝ" },
   currentOrderType: { en: "Current order type", am: "የአሁኑ የትዕዛዝ አይነት", om: "Gosa ajajaa ammaa", ti: "ዓይነት ናይ ሕጂ ትእዛዝ" },

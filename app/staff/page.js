@@ -1,6 +1,12 @@
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import StaffClient from "./StaffClient";
+import StaffEditButton from "./StaffEditButton";
+import ClockInButton, { ClockOutButton } from "./ClockInButton";
+import StaffShiftStatus from "./StaffShiftStatus";
+import { getCurrentUserAttendanceShift } from "./actions";
+import { getAttendanceStatus, getBusinessDateKey, selectAttendanceShift } from "./attendanceSelection";
+import { isActiveRestaurantStatus } from "@/lib/restaurant-lifecycle.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -12,37 +18,6 @@ const roles = {
   CHEF: "Chef",
   BARMAN: "Barman",
 };
-
-function getDutyStatus(shift) {
-  if (!shift) return "OFF DUTY";
-
-  const now = new Date();
-
-  const today = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, "0"),
-    String(now.getDate()).padStart(2, "0"),
-  ].join("-");
-
-  if (shift.shift_date !== today) {
-    return "OFF DUTY";
-  }
-
-  const current = [
-    String(now.getHours()).padStart(2, "0"),
-    String(now.getMinutes()).padStart(2, "0"),
-    String(now.getSeconds()).padStart(2, "0"),
-  ].join(":");
-
-  if (
-    current >= shift.start_time &&
-    current <= shift.end_time
-  ) {
-    return "ON DUTY";
-  }
-
-  return "OFF DUTY";
-}
 
 async function loadStaff() {
   const supabase = await createSupabaseServerClient();
@@ -62,7 +37,7 @@ async function loadStaff() {
   const { data: membership, error: membershipError } =
     await supabase
       .from("restaurant_users")
-      .select("restaurant_id, role")
+      .select("restaurant_id, role, restaurants(status)")
       .eq("user_id", user.id)
       .limit(1)
       .maybeSingle();
@@ -77,6 +52,14 @@ async function loadStaff() {
     };
   }
 
+  const membershipRestaurant = Array.isArray(membership.restaurants)
+    ? membership.restaurants[0]
+    : membership.restaurants;
+  if (!isActiveRestaurantStatus(membershipRestaurant?.status)) {
+    return { state: "unauthorized" };
+  }
+  const canManageStaff = ["ADMIN", "OWNER"].includes(membership.role);
+
   // 3. Get restaurant
   const { data: restaurant, error: restaurantError } =
     await supabase
@@ -90,14 +73,10 @@ async function loadStaff() {
   }
 
   // 4. Get restaurant staff
-  const { data: staff, error: staffError } =
-    await supabase
-      .from("restaurant_users")
-      .select("user_id, role")
-      .eq(
-        "restaurant_id",
-        membership.restaurant_id
-      );
+  const { data: staff, error: staffError } = await supabase
+    .from("restaurant_users")
+    .select("user_id, role, duty_status")
+    .eq("restaurant_id", membership.restaurant_id);
 
   if (staffError) {
     throw staffError;
@@ -120,56 +99,42 @@ async function loadStaff() {
     throw profilesError;
   }
 
-  // 6. Get today's shifts
-  const now = new Date();
+  const profileMap = new Map(
+    (profiles || []).map((profile) => [profile.id, profile])
+  );
 
-  const today = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, "0"),
-    String(now.getDate()).padStart(2, "0"),
-  ].join("-");
-
-  const {
-    data: shifts,
-    error: shiftsError,
-  } = await supabase
-    .from("staff_shifts")
-    .select(
-      "id, user_id, shift_date, start_time, end_time, status"
-    )
-    .eq(
-      "restaurant_id",
-      membership.restaurant_id
-    )
-    .eq("shift_date", today)
-    .order("start_time");
-
-  if (shiftsError) {
-    throw shiftsError;
+  // 6. Read all shifts for managers; other roles may only read their own shift.
+  let shifts;
+  if (["ADMIN", "OWNER"].includes(membership.role)) {
+    const { data, error } = await supabase
+      .from("staff_shifts")
+      .select("id, user_id, shift_name, shift_date, start_time, end_time, status, clock_in_at, clock_out_at, late")
+      .eq("restaurant_id", membership.restaurant_id)
+      .or(`shift_date.eq.${getBusinessDateKey()},and(clock_in_at.not.is.null,clock_out_at.is.null)`)
+      .order("start_time");
+    if (error) throw error;
+    shifts = data || [];
+  } else {
+    const shift = await getCurrentUserAttendanceShift();
+    shifts = shift ? [shift] : [];
   }
 
   // 7. Build staff list
   const staffList = (staff || []).map(
     (member) => {
-      const profile = (profiles || []).find(
-        (item) =>
-          item.id === member.user_id
-      );
+      const profile = profileMap.get(member.user_id);
 
-      const shift = (shifts || []).find(
-        (item) =>
-          item.user_id === member.user_id
-      );
+      const personShifts = shifts.filter((item) => item.user_id === member.user_id);
+      const shift = selectAttendanceShift(personShifts);
+      const effectiveStatus = getAttendanceStatus(shift);
 
       return {
         userId: member.user_id,
-        name:
-          profile?.full_name ||
-          roles[member.role] ||
-          "Staff member",
+        name: profile?.full_name || "Unknown staff member",
         role: member.role,
         shift,
-        dutyStatus: getDutyStatus(shift),
+        dutyStatus: effectiveStatus,
+        isCurrentUser: member.user_id === user.id,
       };
     }
   );
@@ -179,6 +144,8 @@ async function loadStaff() {
     restaurantName:
       restaurant?.name || "Your restaurant",
     role: membership.role,
+    canManageStaff,
+    currentUserId: user.id,
     staff: staffList,
   };
 }
@@ -321,7 +288,7 @@ export default async function StaffPage() {
             </h2>
           </div>
 
-          <StaffClient />
+          {data.canManageStaff && <StaffClient staff={data.staff} />}
         </section>
 
         <section className="metric-grid">
@@ -337,15 +304,7 @@ export default async function StaffPage() {
 
           <article className="metric-card">
             <p>On duty</p>
-            <strong>
-              {
-                data.staff.filter(
-                  (person) =>
-                    person.dutyStatus ===
-                    "ON DUTY"
-                ).length
-              }
-            </strong>
+                <strong>{data.staff.filter((person) => person.dutyStatus === "CLOCKED_IN").length}</strong>
             <span>
               Working right now
             </span>
@@ -357,8 +316,7 @@ export default async function StaffPage() {
               {
                 data.staff.filter(
                   (person) =>
-                    person.dutyStatus ===
-                    "OFF DUTY"
+                    person.dutyStatus === "OFF_DUTY"
                 ).length
               }
             </strong>
@@ -396,6 +354,7 @@ export default async function StaffPage() {
                     <th>Role</th>
                     <th>Shift</th>
                     <th>Status</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
 
@@ -413,29 +372,23 @@ export default async function StaffPage() {
                           person.role}
                       </td>
 
-                      <td>
-                        {person.shift
-                          ? `${person.shift.start_time.slice(
-                              0,
-                              5
-                            )} – ${person.shift.end_time.slice(
-                              0,
-                              5
-                            )}`
-                          : "No shift"}
-                      </td>
+                      <StaffShiftStatus person={person} />
 
                       <td>
-                        <span
-                          className={`status-badge ${
-                            person.dutyStatus ===
-                            "ON DUTY"
-                              ? "status-completed"
-                              : "status-cancelled"
-                          }`}
-                        >
-                          {person.dutyStatus}
-                        </span>
+                        <div className="staff-row-actions">
+                          {data.canManageStaff && (
+                            <StaffEditButton
+                              staff={person}
+                              canRemoveStaff={["ADMIN", "OWNER"].includes(data.role)}
+                            />
+                          )}
+
+                          {person.userId !== data.currentUserId ? null : person.dutyStatus === "ON_DUTY" ? (
+                            <ClockOutButton />
+                          ) : person.dutyStatus === "OFF_DUTY" && (!person.shift || (person.shift.status !== "COMPLETED" && person.shift.status !== "CANCELLED")) ? (
+                            <ClockInButton shift={person.shift} />
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))}

@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useLanguage } from "../i18n/LanguageProvider";
+import { refreshMenuImageUrl } from "./actions";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
@@ -32,20 +33,76 @@ export function MenuFileInput({ id, name = "image", accept = ".jpg,.jpeg,image/j
 }
 
 export function MenuItemImage({ src, alt, imageClassName, fallbackClassName }) {
-  const { t } = useLanguage();
-  const [failedSrc, setFailedSrc] = useState(null);
+  return (
+    <MenuItemImageState
+      key={src || ""}
+      src={src}
+      alt={alt}
+      imageClassName={imageClassName}
+      fallbackClassName={fallbackClassName}
+    />
+  );
+}
 
-  if (!src || failedSrc === src) {
+function MenuItemImageState({ src, alt, imageClassName, fallbackClassName }) {
+  const { t } = useLanguage();
+  const [imageSrc, setImageSrc] = useState(src || null);
+  const [missing, setMissing] = useState(!src);
+  const [refreshError, setRefreshError] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshAttempts = useRef(0);
+
+  async function refreshImage() {
+    if (!imageSrc || refreshing) return;
+    if (refreshAttempts.current >= 2) {
+      setRefreshError(true);
+      return;
+    }
+
+    refreshAttempts.current += 1;
+    setRefreshing(true);
+    setRefreshError(false);
+    try {
+      const refreshedUrl = await refreshMenuImageUrl(imageSrc);
+      if (!refreshedUrl) {
+        setMissing(true);
+        return;
+      }
+      setImageSrc(refreshedUrl);
+    } catch {
+      setRefreshError(true);
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  function retryImage() {
+    refreshAttempts.current = 0;
+    refreshImage();
+  }
+
+  if (missing) {
     return <div className={fallbackClassName}>{t("imageUnavailable")}</div>;
+  }
+
+  if (refreshError) {
+    return (
+      <div className={fallbackClassName} role="group" aria-label={t("imageUnavailable")}>
+        <span>{t("imageUnavailable")}</span>
+        <button type="button" onClick={retryImage} disabled={refreshing}>
+          {refreshing ? t("imageRetrying") : t("imageRetry")}
+        </button>
+      </div>
+    );
   }
 
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
       className={imageClassName}
-      src={src}
+      src={imageSrc}
       alt={alt}
-      onError={() => setFailedSrc(src)}
+      onError={refreshImage}
     />
   );
 }

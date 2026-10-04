@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { assertActiveRestaurantMembership } from "@/lib/auth";
 
 const managerRoles = ["ADMIN", "OWNER", "MANAGER"];
 const tableEditorRoles = ["ADMIN", "OWNER", "MANAGER", "SERVER"];
@@ -20,13 +21,13 @@ async function getMembership() {
 
   const { data: membership, error } = await supabase
     .from("restaurant_users")
-    .select("restaurant_id, role")
+    .select("restaurant_id, role, restaurants(status)")
     .eq("user_id", user.id)
     .limit(1)
     .maybeSingle();
 
   if (error) throw error;
-  if (!membership) throw new Error("Restaurant membership not found.");
+  assertActiveRestaurantMembership(membership);
 
   return { supabase, user, membership };
 }
@@ -78,6 +79,23 @@ export async function updateTableStatus(formData) {
     throw new Error("Invalid table update.");
   }
 
+  const { data: currentTable, error: currentTableError } = await supabase
+    .from("tables")
+    .select("status")
+    .eq("id", id)
+    .eq("restaurant_id", membership.restaurant_id)
+    .maybeSingle();
+  if (currentTableError) throw currentTableError;
+  if (!currentTable) throw new Error("Table not found in this restaurant.");
+  const allowedServerTransitions = {
+    AVAILABLE: ["CLEANING"],
+    OCCUPIED: ["AVAILABLE"],
+    CLEANING: ["AVAILABLE"],
+  };
+  if (membership.role === "SERVER" && !allowedServerTransitions[currentTable.status]?.includes(status)) {
+    throw new Error("Servers can only return occupied or cleaning tables to available after service.");
+  }
+
   const { error } = await supabase
     .from("tables")
     .update({
@@ -90,6 +108,7 @@ export async function updateTableStatus(formData) {
   if (error) throw error;
 
   revalidatePath("/tables");
+  revalidatePath("/server");
   revalidatePath("/");
 }
 

@@ -1,8 +1,11 @@
 import Link from "next/link";
-import DashboardClient from "@/app/admin/DashboardClient";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getAuthContext, getRoleHome } from "@/lib/auth";
 import { redirect } from "next/navigation";
+import AuthenticatedControls from "./i18n/AuthenticatedControls";
+import WelcomeLanding from "./WelcomeLanding";
+import { getBusinessDateKey, toBusinessInstant } from "./staff/attendanceSelection";
+import { BUSINESS_TIME_ZONE, shiftBusinessDate } from "@/lib/business-date.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -16,21 +19,14 @@ const date = new Intl.DateTimeFormat("en-US", {
   weekday: "long",
   month: "long",
   day: "numeric",
+  timeZone: BUSINESS_TIME_ZONE,
 });
 
 const time = new Intl.DateTimeFormat("en-US", {
   hour: "numeric",
   minute: "2-digit",
+  timeZone: BUSINESS_TIME_ZONE,
 });
-
-const roles = {
-  ADMIN: "Admin",
-  OWNER: "Owner",
-  MANAGER: "Manager",
-  SERVER: "Server",
-  CHEF: "Chef",
-  BARMAN: "Barman",
-};
 
 const activeStatuses = new Set([
   "NEW",
@@ -44,22 +40,19 @@ function formatMoney(value) {
   return money.format(Number(value || 0));
 }
 
-function startOfDay(value) {
-  const result = new Date(value);
-  result.setHours(0, 0, 0, 0);
-  return result;
-}
-
-function endOfDay(value) {
-  const result = new Date(value);
-  result.setHours(23, 59, 59, 999);
-  return result;
-}
-
 async function loadDashboard() {
   const supabase = await createSupabaseServerClient();
 
-  const { user, membership } = await getAuthContext(supabase);
+  let user;
+  let membership;
+  try {
+    ({ user, membership } = await getAuthContext(supabase));
+  } catch (error) {
+    if (error?.message === "Auth session missing!") {
+      return { state: "unauthenticated" };
+    }
+    throw error;
+  }
 
   if (!user) {
     return { state: "unauthenticated" };
@@ -77,13 +70,11 @@ async function loadDashboard() {
     ? membership.restaurants[0]
     : membership.restaurants;
 
-  const today = new Date();
-
-  const todayStart = startOfDay(today).toISOString();
-  const todayEnd = endOfDay(today).toISOString();
-
-  const historyStart = new Date(startOfDay(today));
-  historyStart.setDate(historyStart.getDate() - 6);
+  const todayKey = getBusinessDateKey();
+  const todayStart = new Date(toBusinessInstant(todayKey, "00:00:00")).toISOString();
+  const todayEnd = new Date(toBusinessInstant(shiftBusinessDate(todayKey, 1), "00:00:00") - 1).toISOString();
+  const historyStart = new Date(toBusinessInstant(shiftBusinessDate(todayKey, -6), "00:00:00")).toISOString();
+  const analyticsStart = new Date(toBusinessInstant(`${todayKey.slice(0, 4)}-01-01`, "00:00:00")).toISOString();
 
   const canViewFinancials = [
     "ADMIN",
@@ -158,8 +149,24 @@ async function loadDashboard() {
           .eq("restaurant_id", membership.restaurant_id)
           .eq("status", "COMPLETED")
           .neq("orders.status", "CANCELLED")
-          .gte("created_at", historyStart.toISOString())
+          .gte("created_at", historyStart)
           .lte("created_at", todayEnd)
+      : Promise.resolve({
+          data: [],
+          error: null,
+        }),
+
+    canViewFinancials
+      ? supabase
+          .from("payments")
+          .select("id, amount, method, status, created_at, orders!inner(id, order_number, total, status, created_at, created_by, tables(table_number, name), order_items(quantity, unit_price, menu_items(name, station, categories(name))))")
+          .eq("restaurant_id", membership.restaurant_id)
+          .eq("status", "COMPLETED")
+          .eq("orders.restaurant_id", membership.restaurant_id)
+          .neq("orders.status", "CANCELLED")
+          .gte("created_at", analyticsStart)
+          .lte("created_at", todayEnd)
+          .order("created_at", { ascending: false })
       : Promise.resolve({
           data: [],
           error: null,
@@ -180,9 +187,31 @@ async function loadDashboard() {
     itemsResult,
     paymentsResult,
     historyResult,
+    analyticsResult,
   ] = requests;
 
   const orders = ordersResult.data || [];
+  const analyticsPayments = analyticsResult.data || [];
+  const analyticsCreatorIds = [...new Set(analyticsPayments.map((payment) => payment.orders?.created_by).filter(Boolean))];
+  const { data: analyticsProfiles, error: analyticsProfilesError } = analyticsCreatorIds.length
+    ? await supabase.from("profiles").select("id, full_name").in("id", analyticsCreatorIds)
+    : { data: [], error: null };
+  if (analyticsProfilesError) throw analyticsProfilesError;
+  const analyticsProfileMap = new Map((analyticsProfiles || []).map((profile) => [profile.id, profile.full_name || "Not assigned"]));
+  const paidOrders = analyticsPayments.map((payment) => ({
+    ...payment.orders,
+    paymentMethod: payment.method,
+    paidAt: payment.created_at,
+    paidAmount: Number(payment.amount || 0),
+    serverName: analyticsProfileMap.get(payment.orders?.created_by) || "Not assigned",
+    items: (payment.orders?.order_items || []).map((item) => ({
+      name: item.menu_items?.name || "Unnamed item",
+      quantity: Number(item.quantity || 0),
+      unitPrice: Number(item.unit_price || 0),
+      station: item.menu_items?.station || "KITCHEN",
+      category: item.menu_items?.categories?.name || "Uncategorized",
+    })),
+  }));
 
   const tableStatuses = (tablesResult.data || []).map(
     (table) => table.status
@@ -207,7 +236,7 @@ async function loadDashboard() {
   const salesByDay = (
     historyResult.data || []
   ).reduce((totals, payment) => {
-    const day = payment.created_at.slice(0, 10);
+    const day = getBusinessDateKey(new Date(payment.created_at));
 
     totals[day] =
       (totals[day] || 0) +
@@ -243,7 +272,7 @@ async function loadDashboard() {
     ).length,
 
     completedOrders: orders.filter(
-      (order) => order.status === "COMPLETED"
+      (order) => ["COMPLETED", "PAID"].includes(order.status)
     ).length,
 
     totalTables,
@@ -269,6 +298,7 @@ async function loadDashboard() {
       .slice(0, 5),
 
     salesByDay,
+    paidOrders,
   };
 }
 
@@ -362,9 +392,10 @@ function SalesSummary({ values }) {
 
               <span>
                 {new Date(
-                  `${day}T12:00:00`
+                  `${day}T12:00:00.000Z`
                 ).toLocaleDateString("en-US", {
                   weekday: "short",
+                  timeZone: BUSINESS_TIME_ZONE,
                 })}
               </span>
 
@@ -436,6 +467,8 @@ function Dashboard({ data }) {
             <Link className="nav-link" href="/staff">Staff</Link>
           )}
 
+          <Link className="nav-link" href="/history">History</Link>
+
           {data.canManageSettings && (
             <Link className="nav-link" href="/admin/settings">Settings</Link>
           )}
@@ -461,19 +494,8 @@ function Dashboard({ data }) {
             <h1>{data.restaurantName}</h1>
           </div>
 
-          <div className="user-chip">
-            <span className="avatar">
-              {roles[data.role]?.slice(0, 1) ||
-                "S"}
-            </span>
-
-            <span>
-              <strong>
-                {roles[data.role] || data.role}
-              </strong>
-
-              <small>Staff access</small>
-            </span>
+          <div className="dashboard-topbar-actions">
+            <AuthenticatedControls role={data.role} />
           </div>
         </header>
 
@@ -722,12 +744,7 @@ export default async function Home() {
   }
 
   if (data.state === "unauthenticated") {
-    return (
-      <StateMessage
-        title="Sign in to continue"
-        message="Your Supabase session is not active. Sign in through the configured Supabase Auth flow to view this restaurant dashboard."
-      />
-    );
+    return <WelcomeLanding />;
   }
 
   if (data.state === "unauthorized") {

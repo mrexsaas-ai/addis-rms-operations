@@ -1,8 +1,11 @@
 ﻿import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { createTable, updateTable, updateTableStatus, deleteTable } from "./actions";
+import { createTable } from "./actions";
 import TableFilters from "./TableFilters";
+import TableCard from "./TableCard";
+import { isActiveRestaurantStatus } from "@/lib/restaurant-lifecycle.mjs";
+import { getMembership } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -15,20 +18,6 @@ const roles = {
   BARMAN: "Barman",
 };
 
-const statusLabel = {
-  AVAILABLE: "Available",
-  OCCUPIED: "Occupied",
-  RESERVED: "Reserved",
-  CLEANING: "Cleaning",
-};
-
-const statusClass = {
-  AVAILABLE: "available",
-  OCCUPIED: "occupied",
-  RESERVED: "reserved",
-  CLEANING: "cleaning",
-};
-
 export default async function TablesPage() {
   const supabase = await createSupabaseServerClient();
 
@@ -38,12 +27,7 @@ export default async function TablesPage() {
 
   if (!user) redirect("/login");
 
-  const { data: membership } = await supabase
-    .from("restaurant_users")
-    .select("restaurant_id, role, restaurants(name)")
-    .eq("user_id", user.id)
-    .limit(1)
-    .maybeSingle();
+  const membership = await getMembership(supabase, user.id);
 
   if (!membership) {
     return (
@@ -58,15 +42,18 @@ export default async function TablesPage() {
     );
   }
 
+  const membershipRestaurant = membership.restaurants;
+  if (!isActiveRestaurantStatus(membershipRestaurant?.status)) {
+    redirect("/login?restaurantInactive=1");
+  }
+
   const { data: tables, error } = await supabase
     .from("tables")
     .select("id, table_number, name, capacity, status, created_at")
     .eq("restaurant_id", membership.restaurant_id)
     .order("table_number", { ascending: true });
 
-  const restaurant = Array.isArray(membership.restaurants)
-    ? membership.restaurants[0]
-    : membership.restaurants;
+  const restaurant = membershipRestaurant;
 
   const canManage = ["ADMIN", "OWNER", "MANAGER"].includes(membership.role);
   const canUpdate = ["ADMIN", "OWNER", "MANAGER", "SERVER"].includes(membership.role);
@@ -142,6 +129,37 @@ export default async function TablesPage() {
           border: 1px solid #27272a;
           border-radius: 16px;
           background: #111113;
+        }
+        .filter-chips {
+          display: flex;
+          flex: 1 1 auto;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
+        }
+        .filter-chip {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 42px;
+          min-width: 72px;
+          padding: 10px 14px;
+          border: 1px solid #343438;
+          border-radius: 10px;
+          background: #09090a;
+          color: #d8d8dc;
+          cursor: pointer;
+          white-space: nowrap;
+          line-height: 1.2;
+          transition: border-color .18s ease, background .18s ease, color .18s ease;
+        }
+        .filter-chip:hover,
+        .filter-chip.active {
+          border-color: #00e5ff;
+          background: #00e5ff;
+          color: #050505;
         }
         .back-link {
           color: #fff;
@@ -279,6 +297,33 @@ export default async function TablesPage() {
           grid-template-columns: 1fr auto;
           gap: 8px;
         }
+        .status-controls {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 8px;
+          margin-top: 14px;
+          align-items: stretch;
+        }
+        .status-controls select {
+          min-width: 0;
+          min-height: 42px;
+          padding: 10px 12px;
+          border: 1px solid #343438;
+          border-radius: 9px;
+          background: #09090a;
+          color: #fff;
+        }
+        .sr-only {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0, 0, 0, 0);
+          white-space: nowrap;
+          border: 0;
+        }
         .status-row select {
           width: 100%;
           padding: 10px;
@@ -292,8 +337,10 @@ export default async function TablesPage() {
           background: transparent;
           color: #fff;
           border-radius: 9px;
-          padding: 10px 12px;
+          min-height: 42px;
+          padding: 10px 14px;
           cursor: pointer;
+          white-space: nowrap;
         }
         .delete-btn {
           margin-top: 10px;
@@ -316,6 +363,10 @@ export default async function TablesPage() {
           .tables-topbar { flex-direction: column; }
           .stats { grid-template-columns: repeat(2, 1fr); }
           .tables-grid { grid-template-columns: 1fr; }
+          .table-toolbar { align-items: stretch; flex-direction: column; }
+          .filter-chips { justify-content: flex-start; gap: 8px; }
+          .filter-chip { flex: 1 1 calc(50% - 8px); min-width: 0; }
+          .status-controls { grid-template-columns: 1fr; }
         }
       `}</style>
 
@@ -326,7 +377,7 @@ export default async function TablesPage() {
             <p className="eyebrow" style={{ marginTop: 22 }}>TABLE MANAGEMENT</p>
             <h1>{restaurant?.name || "Restaurant"}</h1>
             <p className="subtle">
-              {roles[membership.role] || membership.role} access · Manage your dining floor.
+              <span>{roles[membership.role] || membership.role}</span> <span>access</span> · <span>Manage your dining floor.</span>
             </p>
           </div>
 
@@ -385,79 +436,15 @@ export default async function TablesPage() {
             <div className="tables-grid">
               {error ? (
                 <div className="empty">
-                  Could not load tables: {error.message}
+                  <span>Could not load tables:</span> {error.message}
                 </div>
               ) : allTables.length === 0 ? (
                 <div className="empty">
-                  No tables have been created yet.
-                  {canManage ? " Use the Add table form to create your first table." : ""}
+                  <span>No tables have been created yet.</span>
+                  {canManage ? <span> Use the Add table form to create your first table.</span> : null}
                 </div>
               ) : (
-                allTables.map((table) => (
-                  <article className="table-card" key={table.id} data-table-status={table.status}>
-                    <div className="table-head">
-                      <div>
-                        <div className="table-number">T{table.table_number}</div>
-                        <div className="table-name">{table.name || "Dining table"}</div>
-                      </div>
-                      <span className={`badge ${statusClass[table.status] || ""}`}>
-                        {statusLabel[table.status] || table.status}
-                      </span>
-                    </div>
-
-                    <div className="capacity">
-                      Seats {table.capacity} guests
-                    </div>
-
-                    {canUpdate && (
-                      <form action={updateTableStatus}>
-                        <input type="hidden" name="id" value={table.id} />
-                        <div className="status-row">
-                          <select name="status" defaultValue={table.status}>
-                            <option value="AVAILABLE">Available</option>
-                            <option value="OCCUPIED">Occupied</option>
-                            <option value="RESERVED">Reserved</option>
-                            <option value="CLEANING">Cleaning</option>
-                          </select>
-                          <button className="small-btn" type="submit">
-                            Save
-                          </button>
-                        </div>
-                      </form>
-                    )}
-
-                    {canManage && (
-                      <details>
-                        <summary>Edit table</summary>
-                        <form action={updateTable} className="edit-table-form">
-                          <input type="hidden" name="id" value={table.id} />
-                          <div className="field">
-                            <label>Table number</label>
-                            <input name="table_number" type="number" min="1" defaultValue={table.table_number} required />
-                          </div>
-                          <div className="field">
-                            <label>Display name</label>
-                            <input name="name" defaultValue={table.name || ""} />
-                          </div>
-                          <div className="field">
-                            <label>Capacity</label>
-                            <input name="capacity" type="number" min="1" defaultValue={table.capacity} required />
-                          </div>
-                          <button className="small-btn" type="submit">Save details</button>
-                        </form>
-                      </details>
-                    )}
-
-                    {canManage && (
-                      <form action={deleteTable}>
-                        <input type="hidden" name="id" value={table.id} />
-                        <button className="small-btn delete-btn" type="submit">
-                          Delete table
-                        </button>
-                      </form>
-                    )}
-                  </article>
-                ))
+                allTables.map((table) => <TableCard key={table.id} table={table} canManage={canManage} canUpdate={canUpdate} role={membership.role} />)
               )}
             </div>
           </section>

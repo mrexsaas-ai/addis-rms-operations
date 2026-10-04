@@ -1,16 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useLanguage } from "../i18n/LanguageProvider";
 
 const filters = [
-  ["ALL", "All"],
-  ["AVAILABLE", "Available"],
-  ["OCCUPIED", "Occupied"],
-  ["RESERVED", "Reserved"],
-  ["CLEANING", "Cleaning"],
+  ["ALL", "all"],
+  ["AVAILABLE", "available"],
+  ["OCCUPIED", "occupied"],
+  ["RESERVED", "reserved"],
+  ["CLEANING", "cleaning"],
 ];
 
 export default function TableFilters() {
+  const { t } = useLanguage();
   const [filter, setFilter] = useState("ALL");
 
   useEffect(() => {
@@ -20,10 +22,10 @@ export default function TableFilters() {
   }, [filter]);
 
   return (
-    <div className="filter-chips" role="group" aria-label="Filter tables by status">
+    <div className="filter-chips" role="group" aria-label={t("filterTablesByStatus")}>
       {filters.map(([value, label]) => (
         <button type="button" className={filter === value ? "filter-chip active" : "filter-chip"} key={value} onClick={() => setFilter(value)}>
-          {label}
+          {t(label)}
         </button>
       ))}
     </div>

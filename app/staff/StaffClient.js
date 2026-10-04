@@ -1,18 +1,37 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { createStaff } from "./actions";
+import { addShift, createStaff } from "./actions";
+import { useLanguage } from "../i18n/LanguageProvider";
 
 const roles = [
-  { value: "SERVER", label: "Server" },
-  { value: "CHEF", label: "Chef" },
-  { value: "BARMAN", label: "Barman" },
-  { value: "MANAGER", label: "Manager" },
+  { value: "SERVER", key: "roleSERVER" },
+  { value: "CHEF", key: "roleCHEF" },
+  { value: "BARMAN", key: "roleBARMAN" },
+  { value: "MANAGER", key: "roleMANAGER" },
 ];
 
-export default function StaffClient() {
+function translateStaffMessage(message, t) {
+  const keys = {
+    "Could not create staff member.": "couldNotCreateStaff",
+    "Could not add shift.": "couldNotAddShift",
+    "Shift date, start time and end time are required.": "shiftFieldsRequired",
+    "Shift end time must be later than start time.": "shiftEndMustBeLater",
+    "Staff member created successfully.": "staffCreated",
+    "Shift added successfully.": "shiftAdded",
+  };
+  return keys[message] ? t(keys[message]) : t(message) === message ? message : t(message);
+}
+
+export default function StaffClient({ staff = [] }) {
+  const { t } = useLanguage();
   const [open, setOpen] = useState(false);
+  const [shiftOpen, setShiftOpen] = useState(false);
   const [message, setMessage] = useState("");
+  const [shiftMessage, setShiftMessage] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [staffStartTime, setStaffStartTime] = useState("");
+  const [staffEndTime, setStaffEndTime] = useState("");
   const [isPending, startTransition] = useTransition();
 
   function handleSubmit(event) {
@@ -21,6 +40,9 @@ export default function StaffClient() {
     const form = event.currentTarget;
     const formData = new FormData(form);
 
+    formData.delete("start_time");
+    formData.delete("end_time");
+
     setMessage("");
 
     startTransition(async () => {
@@ -28,14 +50,40 @@ export default function StaffClient() {
         const result = await createStaff(formData);
 
         form.reset();
+        setStaffStartTime("");
+        setStaffEndTime("");
         setOpen(false);
-        setMessage(result.message);
+        setMessage(translateStaffMessage(result.message, t));
 
         window.location.reload();
       } catch (error) {
         setMessage(
-          error?.message ||
-            "Could not create staff member."
+          translateStaffMessage(error?.message || "Could not create staff member.", t)
+        );
+      }
+    });
+  }
+
+  function handleShiftSubmit(event) {
+    event.preventDefault();
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+
+    setShiftMessage("");
+
+    startTransition(async () => {
+      try {
+        const result = await addShift(formData);
+
+        form.reset();
+        setShiftOpen(false);
+        setShiftMessage(translateStaffMessage(result.message, t));
+
+        window.location.reload();
+      } catch (error) {
+        setShiftMessage(
+          translateStaffMessage(error?.message || "Could not add shift.", t)
         );
       }
     });
@@ -43,20 +91,41 @@ export default function StaffClient() {
 
   return (
     <>
-      <button
-        type="button"
-        className="primary-button"
-        onClick={() => {
-          setMessage("");
-          setOpen(true);
-        }}
-      >
-        + Add staff
-      </button>
+      <div className="staff-action-row">
+        <button
+          type="button"
+          className="primary-button"
+          onClick={() => {
+            setMessage("");
+            setStaffStartTime("");
+            setStaffEndTime("");
+            setOpen(true);
+          }}
+        >
+          + {t("addStaff")}
+        </button>
+
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() => {
+            setShiftMessage("");
+            setShiftOpen(true);
+          }}
+        >
+          + {t("addShift")}
+        </button>
+      </div>
 
       {message && !open && (
         <div className="staff-message">
           {message}
+        </div>
+      )}
+
+      {shiftMessage && !shiftOpen && (
+        <div className="staff-message">
+          {shiftMessage}
         </div>
       )}
 
@@ -72,14 +141,14 @@ export default function StaffClient() {
             }
           }}
         >
-          <div className="staff-modal">
+          <div className="staff-modal staff-create-modal">
             <div className="staff-modal-header">
               <div>
                 <p className="eyebrow">
-                  Staff management
+                  {t("staffManagement")}
                 </p>
 
-                <h2>Add staff member</h2>
+                <h2>{t("addStaffMember")}</h2>
               </div>
 
               <button
@@ -93,47 +162,57 @@ export default function StaffClient() {
             </div>
 
             <form
-              className="staff-form"
+              className="staff-form staff-create-form"
               onSubmit={handleSubmit}
             >
-              {/* BASIC INFORMATION */}
               <div className="staff-form-grid">
                 <label>
-                  <span>Full name</span>
+                  <span>{t("fullName")}</span>
 
                   <input
                     name="full_name"
                     type="text"
-                    placeholder="Enter full name"
+                    placeholder={t("enterFullName")}
                     required
                   />
                 </label>
 
                 <label>
-                  <span>Email</span>
+                  <span>{t("email")}</span>
 
                   <input
                     name="email"
                     type="email"
-                    placeholder="staff@example.com"
+                    placeholder={t("staffEmailPlaceholder")}
                     required
                   />
                 </label>
 
                 <label>
-                  <span>Password</span>
+                  <span>{t("password")}</span>
 
-                  <input
-                    name="password"
-                    type="password"
-                    placeholder="Minimum 6 characters"
-                    minLength={6}
-                    required
-                  />
+                  <span className="password-field">
+                    <input
+                      name="password"
+                      type={showPassword ? "text" : "password"}
+                      placeholder={t("minimumPassword")}
+                      minLength={6}
+                      required
+                    />
+
+                    <button
+                      type="button"
+                      className="password-toggle"
+                      aria-label={showPassword ? t("hidePassword") : t("showPassword")}
+                      onClick={() => setShowPassword((value) => !value)}
+                    >
+                      {showPassword ? t("hide") : t("show")}
+                    </button>
+                  </span>
                 </label>
 
                 <label>
-                  <span>Role</span>
+                  <span>{t("role")}</span>
 
                   <select
                     name="role"
@@ -145,45 +224,32 @@ export default function StaffClient() {
                         key={role.value}
                         value={role.value}
                       >
-                        {role.label}
+                        {t(role.key)}
                       </option>
                     ))}
                   </select>
                 </label>
-              </div>
 
-              {/* SHIFT */}
-              <div className="shift-section">
-                <div className="shift-title">
-                  <span>Work shift</span>
-                  <small>Optional</small>
-                </div>
-
-                <div className="shift-form-grid">
+                <div className="staff-create-time-grid">
                   <label>
-                    <span>Shift date</span>
-
-                    <input
-                      name="shift_date"
-                      type="date"
-                    />
-                  </label>
-
-                  <label>
-                    <span>Start time</span>
+                    <span>{t("startTime")}</span>
 
                     <input
                       name="start_time"
                       type="time"
+                      value={staffStartTime}
+                      onChange={(event) => setStaffStartTime(event.target.value)}
                     />
                   </label>
 
                   <label>
-                    <span>End time</span>
+                    <span>{t("endTime")}</span>
 
                     <input
                       name="end_time"
                       type="time"
+                      value={staffEndTime}
+                      onChange={(event) => setStaffEndTime(event.target.value)}
                     />
                   </label>
                 </div>
@@ -195,14 +261,14 @@ export default function StaffClient() {
                 </div>
               )}
 
-              <div className="staff-form-actions">
+              <div className="staff-form-actions staff-create-actions">
                 <button
                   type="button"
                   className="secondary-button"
                   onClick={() => setOpen(false)}
                   disabled={isPending}
                 >
-                  Cancel
+                  {t("cancel")}
                 </button>
 
                 <button
@@ -211,8 +277,136 @@ export default function StaffClient() {
                   disabled={isPending}
                 >
                   {isPending
-                    ? "Creating..."
-                    : "Create staff"}
+                    ? t("creating")
+                    : t("createStaff")}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {shiftOpen && (
+        <div
+          className="staff-modal-overlay"
+          onMouseDown={(event) => {
+            if (
+              event.target === event.currentTarget &&
+              !isPending
+            ) {
+              setShiftOpen(false);
+            }
+          }}
+        >
+          <div className="staff-modal">
+            <div className="staff-modal-header">
+              <div>
+                <p className="eyebrow">
+                  {t("staffManagement")}
+                </p>
+
+                <h2>{t("addShift")}</h2>
+              </div>
+
+              <button
+                type="button"
+                className="staff-modal-close"
+                onClick={() => setShiftOpen(false)}
+                disabled={isPending}
+              >
+                ×
+              </button>
+            </div>
+
+            <form
+              className="staff-form"
+              onSubmit={handleShiftSubmit}
+            >
+              <div className="staff-form-grid shift-form-grid">
+                <label>
+                  <span>{t("staff")}</span>
+
+                  <select
+                    name="staff_user_id"
+                    defaultValue=""
+                    required
+                  >
+                    <option value="">{t("selectStaffMember")}</option>
+
+                    {staff.map((member) => (
+                      <option
+                        key={member.userId}
+                        value={member.userId}
+                      >
+                        {member.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  <span>{t("shiftName")}</span>
+
+                  <input
+                    name="shift_name"
+                    type="text"
+                    placeholder={t("morningRush")}
+                  />
+                </label>
+
+                <label>
+                  <span>{t("shiftDate")}</span>
+
+                  <input
+                    name="shift_date"
+                    type="date"
+                    required
+                  />
+                </label>
+
+                <label className="shift-time-field">
+                  <span>{t("startTime")}</span>
+
+                  <input
+                    name="start_time"
+                    type="time"
+                    required
+                  />
+                </label>
+
+                <label className="shift-time-field">
+                  <span>{t("endTime")}</span>
+
+                  <input
+                    name="end_time"
+                    type="time"
+                    required
+                  />
+                </label>
+              </div>
+
+              {shiftMessage && (
+                <div className="staff-form-error">
+                  {shiftMessage}
+                </div>
+              )}
+
+              <div className="staff-form-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setShiftOpen(false)}
+                  disabled={isPending}
+                >
+                  {t("cancel")}
+                </button>
+
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={isPending}
+                >
+                  {isPending ? t("adding") : t("addShift")}
                 </button>
               </div>
             </form>

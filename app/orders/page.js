@@ -1,25 +1,72 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { SERVICE_ROLES, getAuthContext } from "@/lib/auth";
-import { createOrder, recordPayment } from "./actions";
+import { toBusinessInstant } from "../staff/attendanceSelection";
+import OrdersView from "./OrdersView";
+import ServerOrderCompletionAlerts from "../ServerOrderCompletionAlerts";
 
 export const dynamic = "force-dynamic";
 
-export default async function OrdersPage() {
+const HISTORY_RANGES = ["LAST_7_DAYS", "THIS_WEEK", "ALL"];
+
+function businessDateKey(date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Addis_Ababa",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date).replace(/\//g, "-");
+}
+
+function shiftBusinessDate(dateKey, days) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+  return shifted.toISOString().slice(0, 10);
+}
+
+function historyBounds(range) {
+  if (range === "ALL") return { start: null, end: null };
+
+  const today = businessDateKey();
+  const startDate = range === "THIS_WEEK"
+    ? shiftBusinessDate(today, -(new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7)
+    : shiftBusinessDate(today, -6);
+  const endDate = shiftBusinessDate(today, 1);
+
+  return {
+    start: new Date(toBusinessInstant(startDate, "00:00:00")).toISOString(),
+    end: new Date(toBusinessInstant(endDate, "00:00:00") - 1).toISOString(),
+  };
+}
+
+export default async function OrdersPage({ searchParams = {} }) {
   const supabase = await createSupabaseServerClient();
   const { user, membership } = await getAuthContext(supabase);
   if (!user) redirect("/login");
   if (!membership || !SERVICE_ROLES.includes(membership.role)) redirect("/");
 
+  const resolvedSearchParams = await searchParams;
+  const requestedRange = typeof resolvedSearchParams.historyRange === "string" ? resolvedSearchParams.historyRange : "LAST_7_DAYS";
+  const historyRange = HISTORY_RANGES.includes(requestedRange) ? requestedRange : "LAST_7_DAYS";
+  const bounds = historyBounds(historyRange);
+  let historyQuery = supabase
+    .from("orders")
+    .select("id, order_number, total, status, created_at, table_id, tables(table_number, name)")
+    .eq("restaurant_id", membership.restaurant_id);
+  if (bounds.start) historyQuery = historyQuery.gte("created_at", bounds.start);
+  if (bounds.end) historyQuery = historyQuery.lte("created_at", bounds.end);
+  historyQuery = historyQuery.order("created_at", { ascending: false });
+
   const results = await Promise.all([
     supabase.from("menu_items").select("id, name, price, station").eq("restaurant_id", membership.restaurant_id).eq("is_available", true).order("name"),
     supabase.from("tables").select("id, table_number, name").eq("restaurant_id", membership.restaurant_id).order("table_number"),
-    supabase.from("orders").select("id, order_number, total, status, created_by, tables(table_number, name)").eq("restaurant_id", membership.restaurant_id).order("created_by", { ascending: false }).limit(30),
+    supabase.from("orders").select("id, order_number, total, status, notes, created_at, created_by, tables(table_number, name), kitchen_orders(status)").eq("restaurant_id", membership.restaurant_id).order("created_at", { ascending: false }).limit(30),
+    supabase.from("restaurant_settings").select("enabled_payment_methods").eq("restaurant_id", membership.restaurant_id).maybeSingle(),
+    historyQuery,
   ]);
   const queryError = results.find((result) => result.error)?.error;
   if (queryError) throw queryError;
-  const [{ data: menuItems }, { data: tables }, { data: orders }] = results;
+  const [{ data: menuItems }, { data: tables }, { data: orders }, { data: settings }, { data: historyOrders }] = results;
 
 const orderIds = (orders || []).map((order) => order.id);
 
@@ -51,8 +98,39 @@ const [orderItemsResult, profilesResult] = await Promise.all([
 if (orderItemsResult.error) throw orderItemsResult.error;
 if (profilesResult.error) throw profilesResult.error;
 
+const paymentsResult = orderIds.length
+  ? await supabase
+      .from("payments")
+      .select("order_id, status, amount, created_at")
+      .eq("restaurant_id", membership.restaurant_id)
+      .in("order_id", orderIds)
+      .order("created_at", { ascending: false })
+  : { data: [], error: null };
+
+if (paymentsResult.error) throw paymentsResult.error;
+
+const historyOrderIds = (historyOrders || []).map((order) => order.id);
+const historyPaymentsResult = historyOrderIds.length
+  ? await supabase
+      .from("payments")
+      .select("order_id, status, method, created_at")
+      .eq("restaurant_id", membership.restaurant_id)
+      .in("order_id", historyOrderIds)
+      .order("created_at", { ascending: false })
+  : { data: [], error: null };
+
+if (historyPaymentsResult.error) throw historyPaymentsResult.error;
+
 const orderItems = orderItemsResult.data || [];
 const profiles = profilesResult.data || [];
+const payments = paymentsResult.data || [];
+const historyPaymentByOrder = new Map();
+for (const payment of historyPaymentsResult.data || []) {
+  const current = historyPaymentByOrder.get(payment.order_id);
+  if (!current || payment.status === "COMPLETED" || (current.status !== "COMPLETED" && payment.status === "PENDING")) {
+    historyPaymentByOrder.set(payment.order_id, payment);
+  }
+}
 
 const profileMap = new Map(
   profiles.map((profile) => [
@@ -62,12 +140,17 @@ const profileMap = new Map(
 );
 
 const itemsByOrder = new Map();
+const paymentsByOrder = new Map();
+
+for (const payment of payments) {
+  if (!paymentsByOrder.has(payment.order_id)) paymentsByOrder.set(payment.order_id, payment);
+}
 
 for (const item of orderItems) {
   const current = itemsByOrder.get(item.order_id) || [];
 
   current.push({
-    name: item.menu_items?.name || "Unnamed item",
+    name: item.menu_items?.name || "",
     quantity: Number(item.quantity || 0),
   });
 
@@ -76,23 +159,39 @@ for (const item of orderItems) {
 
 const recentOrders = (orders || []).map((order) => ({
   ...order,
+  status: order.status === "NEW" && (order.kitchen_orders || []).some((stationOrder) => stationOrder.status === "PREPARING")
+    ? "PREPARING"
+    : order.status,
   serverName: profileMap.get(order.created_by) || "Not assigned",
   items: itemsByOrder.get(order.id) || [],
+  payment: paymentsByOrder.get(order.id) || null,
+  orderType: order.notes?.split(" |")[0] || "DINE_IN",
 }));
+  const historicalOrders = (historyOrders || []).map((order) => ({
+    ...order,
+    payment: historyPaymentByOrder.get(order.id) || null,
+    paymentState: historyPaymentByOrder.get(order.id)?.status === "COMPLETED"
+      ? "PAID"
+      : historyPaymentByOrder.get(order.id)?.status === "PENDING"
+        ? "PENDING"
+        : "UNPAID",
+    paymentMethod: historyPaymentByOrder.get(order.id)?.method || null,
+  }));
+  const enabledPaymentMethods = settings?.enabled_payment_methods || ["CASH"];
+  const paymentOptions = ["CASH", "TELEBIRR", "BANK_TRANSFER"].filter((method) => enabledPaymentMethods.includes(method));
+  const canMonitorOrders = ["ADMIN", "OWNER", "MANAGER"].includes(membership.role);
   return (
-    <main className="workspace-page">
-      <header className="workspace-header"><div><p className="eyebrow">SERVER WORKSPACE</p><h1>Orders</h1><p>Create an order and send it to the right station.</p></div><Link href="/">Overview</Link></header>
-      <section className="workspace-grid">
-        <form className="workspace-panel" action={createOrder}>
-          <p className="eyebrow">NEW ORDER</p><h2>Send to kitchen or bar</h2>
-          <label>Menu item<select name="menu_item_id" required><option value="">Select an item</option>{(menuItems || []).map((item) => <option value={item.id} key={item.id}>{item.name} - {item.station} - ETB {item.price}</option>)}</select></label>
-          <label>Quantity<input name="quantity" type="number" min="1" defaultValue="1" required /></label>
-          <label>Table<select name="table_id"><option value="">Takeaway</option>{(tables || []).map((table) => <option value={table.id} key={table.id}>Table {table.table_number}{table.name ? ` - ${table.name}` : ""}</option>)}</select></label>
-          <label>Notes<textarea name="notes" rows="3" /></label>
-          <button type="submit">Create order</button>
-        </form>
-        <section className="workspace-panel"><p className="eyebrow">CURRENT ORDERS</p><h2>Today</h2><div className="workspace-list">{(recentOrders || []).map((order) => <article className="workspace-row" key={order.id}><strong>{order.order_number}</strong><span>{order.status}</span><span>ETB {order.total}</span><form action={recordPayment}><input type="hidden" name="order_id" value={order.id} /><input name="amount" type="number" min="0.01" step="0.01" placeholder="Amount" required /><select name="method" defaultValue="CASH"><option value="CASH">Cash</option><option value="TELEBIRR">Telebirr</option><option value="BANK_TRANSFER">Bank transfer</option></select><input name="reference_number" placeholder="Reference (optional)" /><button type="submit">Record payment</button></form></article>)}{!recentOrders?.length && <p>No orders yet.</p>}</div></section>
-      </section>
-    </main>
+    <>
+      <ServerOrderCompletionAlerts restaurantId={membership.restaurant_id} />
+      <OrdersView
+        canMonitorOrders={canMonitorOrders}
+        historyRange={historyRange}
+        historicalOrders={historicalOrders}
+        menuItems={menuItems || []}
+        orders={recentOrders}
+        paymentOptions={paymentOptions}
+        tables={tables || []}
+      />
+    </>
   );
 }

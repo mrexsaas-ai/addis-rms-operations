@@ -1,46 +1,107 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useLanguage } from "@/app/i18n/LanguageProvider";
 import { deleteBankAccount, saveBankAccount, saveSettings } from "./actions";
 
-const languages = [
-  ["en", "English"],
-  ["am", "Amharic"],
-  ["om", "Afaan Oromoo"],
-  ["ti", "Tigrinya"],
+const paymentMethods = [
+  ["CASH", "cash", "settingsCashDescription"],
+  ["TELEBIRR", "telebirr", "settingsTelebirrDescription"],
+  ["BANK_TRANSFER", "cbe", "settingsCbeDescription"],
+  ["BANK_TRANSFER", "settingsOtherBanks", "settingsOtherBanksDescription"],
 ];
 
-const roles = [
-  ["ADMIN", "Full control", "Manage restaurant, finances, staff, and all operations."],
-  ["OWNER", "Full control", "Manage restaurant, finances, staff, and all operations."],
-  ["MANAGER", "Operations", "Manage menus, tables, orders, and daily operations."],
-  ["SERVER", "Service", "Create orders and manage assigned service workflows."],
-  ["CHEF", "Kitchen", "View and update kitchen orders."],
-  ["BARMAN", "Bar", "Prepare bar items and manage bar workflow."],
+const accountTypes = [
+  { key: "TELEBIRR", label: "Telebirr", labelKey: "telebirr", fieldLabelKey: "telebirrNumber", backendType: "TELEBIRR", providerCode: "telebirr" },
+  { key: "CBE", label: "CBE", labelKey: "cbe", fieldLabelKey: "settingsCbeNumber", backendType: "BANK_TRANSFER", providerCode: "cbe" },
+  { key: "OTHER_BANKS", label: "Other Banks", labelKey: "settingsOtherBanks", fieldLabelKey: "settingsBankNumber", backendType: "BANK_TRANSFER", providerCode: null },
 ];
 
-function messageFrom(error) {
-  return error?.message || "Something went wrong. Please try again.";
+const businessTypes = [
+  ["Restaurant", "businessRestaurant"],
+  ["Cafe", "businessCafe"],
+  ["Hotel", "businessHotel"],
+  ["Other food-service business", "businessOtherFoodService"],
+];
+
+function displayNameKeys(businessType) {
+  if (businessType === "Cafe") return { label: "cafeDisplayName", placeholder: "cafeDisplayNamePlaceholder" };
+  if (businessType === "Hotel") return { label: "hotelDisplayName", placeholder: "hotelDisplayNamePlaceholder" };
+  if (businessType === "Other food-service business") return { label: "otherBusinessDisplayName", placeholder: "otherBusinessDisplayNamePlaceholder" };
+  return { label: "restaurantDisplayName", placeholder: "restaurantDisplayNamePlaceholder" };
 }
 
-export default function SettingsClient({ restaurant, settings, accounts }) {
+const actionMessageKeys = {
+  "Settings saved successfully.": "settingsSavedSuccess",
+  "Bank account updated.": "settingsAccountUpdated",
+  "Bank account added.": "settingsAccountAdded",
+  "Bank account deleted.": "settingsAccountDeleted",
+  "You must be signed in.": "settingsSignInRequired",
+  "You do not have permission to manage settings.": "settingsPermissionDenied",
+  "Restaurant name is required.": "settingsRestaurantNameRequired",
+  "Restaurant name is too long.": "settingsRestaurantNameTooLong",
+  "Business name is required.": "businessNameRequired",
+  "Business name is too long.": "businessNameTooLong",
+  "Business display name is required.": "businessDisplayNameRequired",
+  "Business display name is too long.": "businessDisplayNameTooLong",
+  "Business category is not supported.": "businessCategoryInvalid",
+  "One of the fields is too long.": "settingsFieldTooLong",
+  "Select at least one payment method.": "settingsPaymentMethodRequired",
+  "Choose a supported application language.": "settingsLanguageUnsupported",
+  "Bank name is required.": "settingsBankNameRequired",
+  "Bank name is too long.": "settingsBankNameTooLong",
+  "Account name is required.": "settingsAccountNameRequired",
+  "Account name is too long.": "settingsAccountNameTooLong",
+  "Account number is required.": "settingsAccountNumberRequired",
+  "Account number is too long.": "settingsAccountNumberTooLong",
+  "Choose a supported account type.": "settingsAccountTypeUnsupported",
+  "The payment account was not saved for this restaurant.": "settingsAccountSaveFailed",
+  "Account ID is required.": "settingsAccountIdRequired",
+  "Account ID is too long.": "settingsAccountIdTooLong",
+};
+
+function translateActionMessage(message, t) {
+  const key = actionMessageKeys[message];
+  return key ? t(key) : t("settingsGenericError");
+}
+
+function localizedRequiredField(event, t) {
+  event.currentTarget.setCustomValidity(t("settingsRequiredField"));
+}
+
+function clearFieldValidity(event) {
+  event.currentTarget.setCustomValidity("");
+}
+
+function accountForType(accounts, type) {
+  const usableAccounts = accounts.filter((account) => account.is_active && String(account.account_number || "").trim());
+  if (type.key === "TELEBIRR") return usableAccounts.find((account) => account.type === "TELEBIRR" && account.verify_et_provider === "telebirr");
+  if (type.key === "CBE") return usableAccounts.find((account) => account.type === "BANK_TRANSFER" && account.verify_et_provider === "cbe");
+  return usableAccounts.find((account) => account.type === "BANK_TRANSFER" && account.verify_et_provider !== "cbe");
+}
+
+export default function SettingsClient({ restaurant, settings, accounts = [], accessDenied = false }) {
+  const { t } = useLanguage();
+  const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [notice, setNotice] = useState(null);
-  const [language, setLanguage] = useState(settings?.default_language || "en");
-  const [editingAccount, setEditingAccount] = useState(null);
-
+  const [accountList, setAccountList] = useState(accounts);
+  const [editingType, setEditingType] = useState(null);
+  const [businessType, setBusinessType] = useState(restaurant?.description || "Restaurant");
   const enabledMethods = settings?.enabled_payment_methods || ["CASH"];
-  const qrAccount = accounts.find((account) => account.qr_code_url);
+  const displayName = displayNameKeys(businessType);
 
   function runAction(action, formData, onSuccess) {
     setNotice(null);
     startTransition(async () => {
       try {
         const result = await action(formData);
-        setNotice({ type: "success", text: result.message });
-        onSuccess?.();
+        setNotice({ type: "success", text: translateActionMessage(result.message, t) });
+        onSuccess?.(result);
       } catch (error) {
-        setNotice({ type: "error", text: messageFrom(error) });
+        setNotice({ type: "error", text: translateActionMessage(error?.message, t) });
       }
     });
   }
@@ -53,58 +114,101 @@ export default function SettingsClient({ restaurant, settings, accounts }) {
   function handleDelete(id) {
     const formData = new FormData();
     formData.set("id", id);
-    runAction(deleteBankAccount, formData);
+    runAction(deleteBankAccount, formData, () => {
+      setAccountList((current) => current.filter((account) => account.id !== id));
+      setEditingType(null);
+      router.refresh();
+    });
+  }
+
+  function handleAccountSave(event, type, existingAccount) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    formData.set("type", type.backendType);
+    formData.set("name", type.label);
+    formData.set("verify_et_provider", type.providerCode || String(formData.get("verify_et_provider") || ""));
+    if (existingAccount?.id) formData.set("id", existingAccount.id);
+    formData.set("is_active", "on");
+    runAction(saveBankAccount, formData, (result) => {
+      const savedAccount = result.account;
+      setAccountList((current) => existingAccount
+        ? current.map((account) => account.id === existingAccount.id ? savedAccount : account)
+        : [...current, savedAccount]);
+      setEditingType(null);
+      router.refresh();
+    });
+  }
+
+  if (accessDenied) {
+    return (
+      <main className="state-page">
+        <div className="state-panel">
+          <span className="brand-mark">ADDIS RMS</span>
+          <p className="eyebrow">{t("settingsAccessControl")}</p>
+          <h1>{t("settingsRestricted")}</h1>
+          <p>{t("settingsAdminOwnerRequired")}</p>
+          <Link className="back-link" href="/">{t("settingsReturnDashboard")}</Link>
+        </div>
+      </main>
+    );
   }
 
   return (
     <div className="settings-shell">
       <header className="settings-header">
         <div>
-          <a className="settings-back" href="/admin">← Admin area</a>
-          <p className="settings-eyebrow">CONTROL CENTER / SETTINGS</p>
-          <h1>Restaurant settings</h1>
-          <p className="settings-lede">Shape how {restaurant?.name || "your restaurant"} works across the floor, kitchen, and guest experience.</p>
+          <Link className="settings-back" href="/admin">&larr; {t("settingsAdminArea")}</Link>
+          <p className="settings-eyebrow">{t("settingsControlCenter")}</p>
+          <h1>{t("settingsPageTitle")}</h1>
+          <p className="settings-lede">{t("settingsPageDescription")}</p>
         </div>
-        <div className="settings-status"><span className="settings-status-dot" /> Admin access</div>
+        <div className="settings-status"><span className="settings-status-dot" /> {t("settingsAdminAccess")}</div>
       </header>
 
       {notice && <div className={`settings-notice settings-notice-${notice.type}`}>{notice.text}</div>}
 
-      <form className="settings-form" onSubmit={handleSettingsSubmit}>
+      <div className="settings-form">
+        <form id="settings-form" onSubmit={handleSettingsSubmit}>
         <section className="settings-card settings-card-featured">
-          <div className="settings-section-heading"><div><p className="settings-eyebrow">01 / Identity</p><h2>Restaurant information</h2></div><span className="settings-badge">Live profile</span></div>
-          <div className="settings-grid settings-grid-identity">
-            <div className="settings-fields">
-              <label className="settings-field"><span>Restaurant name</span><input name="restaurant_name" defaultValue={restaurant?.name || ""} required maxLength={160} /></label>
-              <label className="settings-field"><span>Phone</span><input name="phone" type="tel" defaultValue={restaurant?.phone || ""} maxLength={40} placeholder="+251 ..." /></label>
-              <label className="settings-field settings-field-wide"><span>Address</span><input name="address" defaultValue={restaurant?.address || ""} maxLength={255} placeholder="Addis Ababa, Ethiopia" /></label>
-              <label className="settings-field settings-field-wide"><span>Logo URL <em>Optional</em></span><input name="logo_url" type="url" defaultValue={restaurant?.logo_url || ""} maxLength={500} placeholder="https://..." /></label>
-            </div>
-            <div className="settings-logo-preview">{restaurant?.logo_url ? <img src={restaurant.logo_url} alt="Restaurant logo" /> : <span>{(restaurant?.name || "A").slice(0, 1).toUpperCase()}</span>}<small>Restaurant mark</small></div>
+          <div className="settings-section-heading"><div><p className="settings-eyebrow">{t("settingsProfileSection")}</p><h2>{t("settingsRestaurantInformation")}</h2></div><span className="settings-badge">{t("settingsLiveProfile")}</span></div>
+          <div className="settings-fields">
+            <label className="settings-field"><span>{t("businessCategory")}</span><select name="business_type" value={businessType} onChange={(event) => setBusinessType(event.target.value)}>{businessTypes.map(([value, labelKey]) => <option value={value} key={value}>{t(labelKey)}</option>)}</select></label>
+            <label className="settings-field"><span>{t("businessName")}</span><input name="business_legal_name" defaultValue={restaurant?.business_legal_name || ""} placeholder={t("businessNamePlaceholder")} required maxLength={160} onInvalid={(event) => localizedRequiredField(event, t)} onInput={clearFieldValidity} /><small>{t("businessLegalNameHelper")}</small></label>
+            <label className="settings-field"><span>{t(displayName.label)}</span><input name="restaurant_name" defaultValue={restaurant?.name || ""} placeholder={t(displayName.placeholder)} required maxLength={160} onInvalid={(event) => localizedRequiredField(event, t)} onInput={clearFieldValidity} /><small>{t("businessDisplayNameHelper")}</small></label>
+            <label className="settings-field"><span>{t("settingsPhoneNumber")}</span><input name="phone" type="tel" defaultValue={restaurant?.phone || ""} maxLength={40} /></label>
           </div>
+          <input type="hidden" name="address" value={restaurant?.address || ""} readOnly />
+          <input type="hidden" name="logo_url" value={restaurant?.logo_url || ""} readOnly />
+          <input type="hidden" name="default_language" value={settings?.default_language || "en"} readOnly />
         </section>
 
         <section className="settings-card">
-          <div className="settings-section-heading"><div><p className="settings-eyebrow">02 / Checkout</p><h2>Payment methods</h2></div><span className="settings-caption">Ready for order workflows</span></div>
-          <p className="settings-description">Choose the payment methods your team can record. Payment status remains a manual operational action.</p>
-          <div className="settings-method-grid">{[["CASH", "Cash", "Record cash collected at the counter."], ["TELEBIRR", "Telebirr", "Record Telebirr payments and references."], ["BANK_TRANSFER", "Bank transfer", "Record transfers against configured accounts."]].map(([value, label, description]) => <label className="settings-toggle-card" key={value}><input type="checkbox" name={value} defaultChecked={enabledMethods.includes(value)} /><span className="settings-toggle" /><span><strong>{label}</strong><small>{description}</small></span></label>)}</div>
+          <div className="settings-section-heading"><div><p className="settings-eyebrow">{t("settingsCheckoutSection")}</p><h2>{t("settingsPaymentMethods")}</h2></div><span className="settings-caption">{t("settingsManualPaymentFlow")}</span></div>
+          <p className="settings-description">{t("settingsPaymentMethodsDescription")}</p>
+          <div className="settings-method-grid">{paymentMethods.map(([value, labelKey, descriptionKey]) => <label className="settings-toggle-card" key={`${value}-${labelKey}`}><input type="checkbox" name={value} defaultChecked={enabledMethods.includes(value)} /><span className="settings-toggle" /><span><strong>{t(labelKey)}</strong><small>{t(descriptionKey)}</small></span></label>)}</div>
         </section>
+        </form>
 
         <section className="settings-card">
-          <div className="settings-section-heading"><div><p className="settings-eyebrow">03 / Finance</p><h2>Bank accounts</h2></div><span className="settings-caption">{accounts.length} configured</span></div>
-          <p className="settings-description">Keep payout details available to staff without claiming automatic payment verification.</p>
-          <div className="settings-account-list">{accounts.length ? accounts.map((account) => <div className="settings-account-row" key={account.id}><div className="settings-account-icon">{account.type === "TELEBIRR" ? "T" : "B"}</div><div className="settings-account-details"><strong>{account.name}</strong><span>{account.account_name} · {account.account_number}</span>{account.branch && <small>{account.branch}</small>}</div><span className={`settings-pill ${account.is_active ? "settings-pill-active" : ""}`}>{account.is_active ? "Active" : "Inactive"}</span><button type="button" className="settings-text-button" onClick={() => setEditingAccount(account)}>Edit</button><button type="button" className="settings-icon-button" aria-label={`Delete ${account.name}`} onClick={() => handleDelete(account.id)} disabled={isPending}>×</button></div>) : <p className="settings-empty">No bank accounts configured yet.</p>}</div>
-          <div className="settings-account-editor" key={editingAccount?.id || "new-account"}><h3>{editingAccount ? "Edit account" : "Add bank account"}</h3><input type="hidden" name="id" defaultValue={editingAccount?.id || ""} /><div className="settings-fields settings-fields-account"><label className="settings-field"><span>Type</span><select name="type" defaultValue={editingAccount?.type || "BANK_TRANSFER"}><option value="BANK_TRANSFER">Bank transfer</option><option value="TELEBIRR">Telebirr</option></select></label><label className="settings-field"><span>Bank name</span><input name="name" defaultValue={editingAccount?.name || ""} /></label><label className="settings-field"><span>Account name</span><input name="account_name" defaultValue={editingAccount?.account_name || ""} /></label><label className="settings-field"><span>Account number</span><input name="account_number" defaultValue={editingAccount?.account_number || ""} /></label><label className="settings-field"><span>Branch <em>Optional</em></span><input name="branch" defaultValue={editingAccount?.branch || ""} /></label><label className="settings-field"><span>QR image URL <em>Optional</em></span><input name="qr_code_url" type="url" defaultValue={editingAccount?.qr_code_url || ""} /></label></div><label className="settings-check"><input type="checkbox" name="is_active" defaultChecked={editingAccount ? editingAccount.is_active : true} /> Account is active</label><div className="settings-inline-actions"><button type="button" className="settings-primary-button" disabled={isPending} onClick={(event) => runAction(saveBankAccount, new FormData(event.currentTarget.closest("form")), () => setEditingAccount(null))}>{isPending ? "Saving..." : editingAccount ? "Update account" : "Add account"}</button>{editingAccount && <button type="button" className="settings-secondary-button" onClick={() => setEditingAccount(null)}>Cancel</button>}</div></div>
+          <div className="settings-section-heading"><div><p className="settings-eyebrow">{t("settingsAccountsSection")}</p><h2>{t("settingsAccountConfiguration")}</h2></div><span className="settings-caption">{t("settingsConfiguredCount").replace("{count}", String(accountList.length))}</span></div>
+          <p className="settings-description">{t("settingsAccountDescription")}</p>
+          <div className="settings-account-list">{accountTypes.map((type) => {
+            const account = accountForType(accountList, type);
+            const isEditing = editingType === type.key;
+            return <article className={`settings-account-card ${isEditing ? "is-editing" : ""}`} key={type.key}>
+              <div className="settings-account-heading"><div><span className="settings-account-kicker">{t(type.labelKey)}</span><h3>{t(type.labelKey)}</h3></div>{account && !isEditing && <span className="settings-pill settings-pill-active">{t("settingsSaved")}</span>}</div>
+              {isEditing ? <form className="settings-account-editor" onSubmit={(event) => handleAccountSave(event, type, account)}>
+                <label className="settings-field"><span>{t(type.fieldLabelKey)}</span><input name="account_number" defaultValue={account?.account_number || ""} required maxLength={80} onInvalid={(event) => localizedRequiredField(event, t)} onInput={clearFieldValidity} /></label>
+                <label className="settings-field"><span>{t("settingsAccountHolderName")}</span><input name="account_name" defaultValue={account?.account_name || ""} required maxLength={160} onInvalid={(event) => localizedRequiredField(event, t)} onInput={clearFieldValidity} /></label>
+                {type.key === "OTHER_BANKS" && <label className="settings-field"><span>Verify.et provider</span><select name="verify_et_provider" defaultValue={account?.verify_et_provider || ""}><option value="">Manual verification only</option><option value="cbe">CBE</option><option value="boa">Bank of Abyssinia</option><option value="dashen">Dashen</option><option value="awash">Awash</option><option value="siinqee">Siinqee</option></select></label>}
+                <div className="settings-inline-actions"><button className="settings-primary-button" disabled={isPending} type="submit">{isPending ? t("settingsSaving") : t("save")}</button><button className="settings-secondary-button" disabled={isPending} type="button" onClick={() => setEditingType(null)}>{t("Cancel")}</button></div>
+              </form> : account ? <div className="settings-account-readonly"><div><span>{t(type.fieldLabelKey)}</span><strong>{account.account_number}</strong><small>{account.account_name}</small></div><div className="settings-account-actions"><button className="settings-text-button" type="button" onClick={() => setEditingType(type.key)}>{t("Edit")}</button><button className="settings-icon-button" type="button" aria-label={t("settingsRemoveAccount").replace("{account}", t(type.labelKey))} onClick={() => handleDelete(account.id)} disabled={isPending}>&times;</button></div></div> : <div className="settings-account-empty"><span>{t("settingsNoAccountConfigured")}</span><button className="settings-secondary-button" type="button" onClick={() => setEditingType(type.key)}>{t("Add")}</button></div>}
+            </article>;
+          })}</div>
         </section>
 
-        <section className="settings-card settings-two-column"><div><div className="settings-section-heading"><div><p className="settings-eyebrow">04 / Guest payments</p><h2>QR payment</h2></div><span className="settings-caption">Manual confirmation</span></div><p className="settings-description">Display a payment QR image for guests. Your team still confirms payment manually.</p><div className="settings-qr-box">{qrAccount?.qr_code_url ? <img src={qrAccount.qr_code_url} alt="Configured payment QR" /> : <span>QR preview<br /><small>Set a QR image URL on a payment account</small></span>}</div></div><div><div className="settings-section-heading"><div><p className="settings-eyebrow">05 / Receipts</p><h2>Receipt settings</h2></div><span className="settings-badge">Locked</span></div><div className="settings-receipt"><span className="settings-receipt-icon">EN</span><div><strong>Receipt language: English only</strong><p>Application language preferences never change printed or digital receipt language.</p></div></div></div></section>
-
-        <section className="settings-card"><div className="settings-section-heading"><div><p className="settings-eyebrow">06 / Workspace</p><h2>Language settings</h2></div><span className="settings-caption">UI only</span></div><p className="settings-description">Choose the language for the application interface. This does not change IDs, business logic, payments, orders, or receipts.</p><div className="settings-language-grid">{languages.map(([value, label]) => <label className={`settings-language-option ${language === value ? "selected" : ""}`} key={value}><input type="radio" name="default_language" value={value} checked={language === value} onChange={() => setLanguage(value)} /><span className="settings-radio" /><strong>{label}</strong></label>)}</div></section>
-
-        <section className="settings-card"><div className="settings-section-heading"><div><p className="settings-eyebrow">07 / Access model</p><h2>User & role permissions</h2></div><span className="settings-caption">Supabase roles</span></div><div className="settings-role-grid">{roles.map(([role, access, detail]) => <div className="settings-role" key={role}><div className="settings-role-top"><strong>{role}</strong><span>{access}</span></div><p>{detail}</p></div>)}</div></section>
-
-        <div className="settings-save-bar"><span>Changes apply to this restaurant only.</span><button type="submit" className="settings-primary-button" disabled={isPending}>{isPending ? "Saving changes..." : "Save changes"}</button></div>
-      </form>
+        <div className="settings-save-bar"><span>{t("settingsChangesLocal")}</span><button form="settings-form" type="submit" className="settings-primary-button" disabled={isPending}>{isPending ? t("settingsSavingChanges") : t("settingsSaveChanges")}</button></div>
+      </div>
     </div>
   );
 }

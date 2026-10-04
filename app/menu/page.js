@@ -1,24 +1,15 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import {
-  createCategory,
-  createMenuItem,
-  updateMenuItem,
-  deleteMenuItem,
-} from "./actions";
+import { isActiveRestaurantStatus } from "@/lib/restaurant-lifecycle.mjs";
+import { getMembership } from "@/lib/auth";
+import { createCategory, deleteMenuItem } from "./actions";
 import MenuFilters from "./MenuFilters";
+import MenuImageForm, { MenuActionFeedback, MenuFileInput, MenuItemImage } from "./MenuImageForm";
+import MenuHeader from "./MenuHeader";
+import { MenuCategoryLabel, MenuCategoryOptions } from "./MenuCategory";
+import { signMenuImages } from "@/lib/menu-images";
 
 export const dynamic = "force-dynamic";
-
-const roles = {
-  ADMIN: "Admin",
-  OWNER: "Owner",
-  MANAGER: "Manager",
-  SERVER: "Server",
-  CHEF: "Chef",
-  BARMAN: "Barman",
-};
 
 function formatETB(value) {
   return new Intl.NumberFormat("en-US", {
@@ -28,7 +19,11 @@ function formatETB(value) {
   }).format(Number(value || 0));
 }
 
-export default async function MenuPage() {
+export default async function MenuPage({ searchParams }) {
+  const resolvedSearchParams = await searchParams;
+  const actionError = Array.isArray(resolvedSearchParams?.error)
+    ? resolvedSearchParams.error[0]
+    : resolvedSearchParams?.error;
   const supabase = await createSupabaseServerClient();
 
   const {
@@ -37,16 +32,7 @@ export default async function MenuPage() {
 
   if (!user) redirect("/login");
 
-  const { data: membership, error: membershipError } = await supabase
-    .from("restaurant_users")
-    .select("restaurant_id, role, restaurants(name)")
-    .eq("user_id", user.id)
-    .limit(1)
-    .maybeSingle();
-
-  if (membershipError) {
-    throw new Error(membershipError.message);
-  }
+  const membership = await getMembership(supabase, user.id);
 
   if (!membership) {
     return (
@@ -61,9 +47,10 @@ export default async function MenuPage() {
     );
   }
 
-  const restaurant = Array.isArray(membership.restaurants)
-    ? membership.restaurants[0]
-    : membership.restaurants;
+  const restaurant = membership.restaurants;
+  if (!isActiveRestaurantStatus(restaurant?.status)) {
+    redirect("/login?restaurantInactive=1");
+  }
 
   const [{ data: categories, error: categoriesError }, { data: items, error: itemsError }] =
     await Promise.all([
@@ -87,7 +74,7 @@ export default async function MenuPage() {
   if (itemsError) throw new Error(itemsError.message);
 
   const categoryList = categories || [];
-  const menuItems = items || [];
+  const menuItems = await signMenuImages(supabase, items || []);
   const canManage = ["ADMIN", "OWNER", "MANAGER"].includes(membership.role);
 
   const categoryMap = Object.fromEntries(
@@ -187,33 +174,52 @@ export default async function MenuPage() {
 
         .filter-chips {
           display: flex;
+          align-items: stretch;
           flex-wrap: wrap;
-          gap: 8px;
+          gap: 10px;
+          width: 100%;
         }
 
-        .filter-chip {
+        .menu-page .filter-chip {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          min-height: 42px;
+          min-width: 96px;
           border: 1px solid #303033;
-          border-radius: 999px;
-          padding: 8px 11px;
-          background: transparent;
+          border-radius: 10px;
+          padding: 10px 14px;
+          background: #09090a;
           color: #aaa;
           cursor: pointer;
           font: inherit;
           font-size: 12px;
+          line-height: 1.2;
+          white-space: nowrap;
         }
 
-        .filter-chip span {
+        .menu-page .filter-chip .filter-count {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 24px;
+          min-height: 22px;
+          padding: 0 6px;
+          border-radius: 999px;
+          background: rgba(255, 255, 255, .08);
           color: #777;
-          margin-left: 4px;
+          margin-left: 0;
         }
 
-        .filter-chip.active {
+        .menu-page .filter-chip.active {
           border-color: #d8ff45;
           background: #d8ff45;
           color: #101010;
         }
 
-        .filter-chip.active span {
+        .menu-page .filter-chip.active .filter-count {
+          background: rgba(0, 0, 0, .12);
           color: #101010;
         }
 
@@ -276,6 +282,48 @@ export default async function MenuPage() {
         .field textarea {
           min-height: 78px;
           resize: vertical;
+        }
+
+        .menu-file-picker {
+          display: flex;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 10px;
+          min-width: 0;
+        }
+
+        .menu-file-input {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          opacity: 0;
+          pointer-events: none;
+        }
+
+        .menu-file-button {
+          min-height: 42px;
+          padding: 10px 14px;
+          border: 1px solid #303033;
+          border-radius: 10px;
+          background: #09090a;
+          color: #fff;
+          cursor: pointer;
+          font: inherit;
+        }
+
+        .menu-file-button:hover,
+        .menu-file-button:focus-visible {
+          border-color: #d8ff45;
+          color: #d8ff45;
+          outline: none;
+        }
+
+        .menu-file-name {
+          min-width: 0;
+          overflow: hidden;
+          color: #aaa;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .primary {
@@ -442,27 +490,32 @@ export default async function MenuPage() {
           .menu-grid {
             grid-template-columns: 1fr;
           }
+
+          .menu-page .filter-chip {
+            flex: 1 1 calc(50% - 10px);
+            min-width: 0;
+          }
+
+          .menu-file-picker {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .menu-file-button,
+          .menu-file-name {
+            width: 100%;
+          }
         }
       `}</style>
 
       <div className="menu-wrap">
-        <header className="menu-topbar">
-          <div>
-            <span className="brand-mark">ADDIS RMS</span>
-            <p className="eyebrow" style={{ marginTop: 22 }}>
-              MENU MANAGEMENT
-            </p>
-            <h1>{restaurant?.name || "Restaurant"}</h1>
-            <p className="subtle">
-              {roles[membership.role] || membership.role} access · Food and drink catalog.
-            </p>
-          </div>
+        <MenuHeader
+          restaurantName={restaurant?.name}
+          role={membership.role}
+          canManage={canManage}
+        />
 
-          <div className="menu-actions">
-            {canManage && <a className="menu-cta" href="#menu-item-form">Add menu item</a>}
-            <Link href="/" className="back-link">← Overview</Link>
-          </div>
-        </header>
+        <MenuActionFeedback errorCode={actionError} />
 
         <MenuFilters
           totalItems={menuItems.length}
@@ -504,7 +557,7 @@ export default async function MenuPage() {
                 <div className="category-list">
                   {categoryList.map((category) => (
                     <span className="category-pill" key={category.id}>
-                      {category.name}
+                      <MenuCategoryLabel name={category.name} />
                     </span>
                   ))}
                 </div>
@@ -514,7 +567,8 @@ export default async function MenuPage() {
                 <p className="eyebrow">MENU ITEM</p>
                 <h2>Add food or drink</h2>
 
-                <form action={createMenuItem}>
+                <MenuImageForm>
+                  <input type="hidden" name="_action" value="create_item" />
                   <div className="field">
                     <label htmlFor="item-name">Name</label>
                     <input
@@ -528,12 +582,7 @@ export default async function MenuPage() {
                   <div className="field">
                     <label htmlFor="category_id">Category</label>
                     <select id="category_id" name="category_id">
-                      <option value="">Uncategorized</option>
-                      {categoryList.map((category) => (
-                        <option value={category.id} key={category.id}>
-                          {category.name}
-                        </option>
-                      ))}
+                      <MenuCategoryOptions categories={categoryList} />
                     </select>
                   </div>
 
@@ -569,18 +618,13 @@ export default async function MenuPage() {
 
                   <div className="field">
                     <label htmlFor="image">Photo — JPG / JPEG only</label>
-                    <input
-                      id="image"
-                      name="image"
-                      type="file"
-                      accept=".jpg,.jpeg,image/jpeg"
-                    />
+                    <MenuFileInput id="image" />
                   </div>
 
                   <button className="primary" type="submit">
                     Add menu item
                   </button>
-                </form>
+                </MenuImageForm>
               </section>
             </aside>
           )}
@@ -603,21 +647,18 @@ export default async function MenuPage() {
                     data-name={item.name.toLowerCase()}
                     data-category={item.category_id || "UNCATEGORIZED"}
                   >
-                    {item.image_url ? (
-                      <img
-                        className="item-image"
-                        src={item.image_url}
-                        alt={item.name}
-                      />
-                    ) : (
-                      <div className="image-placeholder">NO IMAGE</div>
-                    )}
+                    <MenuItemImage
+                      src={item.image_url}
+                      alt={item.name}
+                      imageClassName="item-image"
+                      fallbackClassName="image-placeholder"
+                    />
 
                     <div className="item-body">
                       <div className="item-name">{item.name}</div>
 
                       <div className="item-category">
-                        {categoryMap[item.category_id] || "Uncategorized"}
+                        {categoryMap[item.category_id] ? <MenuCategoryLabel name={categoryMap[item.category_id]} /> : <MenuCategoryLabel name="Uncategorized" />}
                       </div>
 
                       <div className="price">
@@ -641,10 +682,8 @@ export default async function MenuPage() {
                           <details>
                             <summary>Edit menu item</summary>
 
-                            <form
-                              className="edit-form"
-                              action={updateMenuItem}
-                            >
+                            <MenuImageForm className="edit-form">
+                              <input type="hidden" name="_action" value="update_item" />
                               <input
                                 type="hidden"
                                 name="id"
@@ -666,17 +705,7 @@ export default async function MenuPage() {
                                   name="category_id"
                                   defaultValue={item.category_id || ""}
                                 >
-                                  <option value="">
-                                    Uncategorized
-                                  </option>
-                                  {categoryList.map((category) => (
-                                    <option
-                                      value={category.id}
-                                      key={category.id}
-                                    >
-                                      {category.name}
-                                    </option>
-                                  ))}
+                                  <MenuCategoryOptions categories={categoryList} />
                                 </select>
                               </div>
 
@@ -710,11 +739,7 @@ export default async function MenuPage() {
 
                               <div className="field">
                                 <label>Replace photo — JPG/JPEG</label>
-                                <input
-                                  name="image"
-                                  type="file"
-                                  accept=".jpg,.jpeg,image/jpeg"
-                                />
+                                <MenuFileInput id={`replace-image-${item.id}`} />
                               </div>
 
                               <div className="field">
@@ -733,7 +758,7 @@ export default async function MenuPage() {
                               <button className="primary" type="submit">
                                 Save changes
                               </button>
-                            </form>
+                            </MenuImageForm>
                           </details>
 
                           <form

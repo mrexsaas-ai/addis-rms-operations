@@ -1,0 +1,70 @@
+.history-page {
+  min-height: 100vh;
+  padding: 32px;
+  background: radial-gradient(circle at 80% 0%, rgba(0, 218, 255, 0.08), transparent 32%), #08090b;
+  color: #f6fbff;
+}
+
+.history-shell { max-width: 1440px; margin: 0 auto; }
+.history-header, .history-section-heading { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; }
+.history-header { margin-bottom: 28px; }
+.history-header h1 { margin: 0; font-size: clamp(34px, 5vw, 62px); letter-spacing: -0.06em; }
+.history-header p:not(.eyebrow) { margin: 12px 0 0; color: rgba(246, 251, 255, 0.62); }
+.history-back, .history-clear { color: #f6fbff; text-decoration: none; border: 1px solid rgba(0, 218, 255, 0.32); border-radius: 10px; padding: 10px 14px; }
+.history-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+.history-summary-card, .history-panel { border: 1px solid rgba(255,255,255,0.09); background: rgba(15, 18, 22, 0.92); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02); border-radius: 14px; }
+.history-summary-card { padding: 18px; }
+.history-summary-card span, .history-section-heading > span { color: rgba(246, 251, 255, 0.55); font-size: 11px; text-transform: uppercase; letter-spacing: .12em; }
+.history-summary-card strong { display: block; margin-top: 14px; color: #74eaff; font-size: 32px; letter-spacing: -0.05em; }
+.history-panel { padding: 20px; margin-bottom: 18px; }
+.history-best-selling .history-section-heading { align-items: center; }
+.history-best-selling .history-section-heading h2 { color: #f6fbff; font-size: 19px; margin: 0; }
+.history-best-selling-columns { display: grid; gap: 20px; grid-template-columns: minmax(110px, 1fr) minmax(120px, auto); text-align: right; }
+.history-best-selling-columns span { color: rgba(246, 251, 255, .55); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.history-best-selling-list { display: grid; }
+.history-best-selling-row { align-items: center; border-top: 1px solid rgba(255, 255, 255, .08); display: grid; gap: 18px; grid-template-columns: minmax(160px, 1fr) minmax(130px, .8fr) minmax(120px, auto); padding: 13px 4px; }
+.history-best-selling-item { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; min-width: 0; }
+.history-best-selling-item strong { color: #f6fbff; font-size: 13px; overflow-wrap: anywhere; }
+.history-best-selling-quantity { align-items: center; display: grid; gap: 9px; grid-template-columns: 32px minmax(50px, 1fr); }
+.history-best-selling-quantity > strong { color: #74eaff; font-size: 13px; font-variant-numeric: tabular-nums; }
+.history-best-selling-track { background: rgba(255, 255, 255, .07); border-radius: 99px; height: 5px; overflow: hidden; }
+.history-best-selling-track span { background: linear-gradient(90deg, #39cfe3, #74eaff); border-radius: inherit; display: block; height: 100%; }
+.history-best-selling-sales { color: #d8faff; font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+.history-best-selling-empty { color: rgba(246, 251, 255, .58); font-size: 12px; margin: 0; padding: 14px 4px 4px; }
+.history-period-toolbar { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; }
+.history-period-group { display: flex; flex-wrap: wrap; gap: 7px; min-width: 0; }
+.history-period-button { border: 1px solid rgba(255,255,255,.1); border-radius: 7px; color: rgba(246,251,255,.68); padding: 8px 10px; text-decoration: none; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+.history-period-button:hover { border-color: rgba(116,234,255,.5); color: #f6fbff; }
+.history-period-button.active { background: rgba(116,234,255,.14); border-color: #74eaff; color: #eaffff; }
+.history-year-selector { display: grid; flex: 0 0 145px; gap: 7px; color: rgba(246,251,255,.62); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.history-year-form { display: flex; align-items: end; gap: 7px; }
+.history-year-form button { border: 1px solid rgba(116,234,255,.28); border-radius: 8px; background: rgba(116,234,255,.1); color: #dffcff; padding: 9px 10px; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.history-year-selector select { width: 100%; box-sizing: border-box; border: 1px solid rgba(116,234,255,.35); border-radius: 8px; background: #090b0e; color: #f6fbff; padding: 9px 10px; font: inherit; text-transform: none; letter-spacing: 0; }
+.history-period-range { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; color: rgba(246,251,255,.62); font-size: 13px; }
+.history-period-range strong { color: #74eaff; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+.history-filters form { display: grid; grid-template-columns: 2fr repeat(2, 150px) 1.2fr 1fr 150px auto auto; gap: 10px; align-items: end; }
+.history-filters label { display: grid; gap: 7px; color: rgba(246, 251, 255, 0.62); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.history-filters input, .history-filters select { width: 100%; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.13); background: #090b0e; color: #f6fbff; border-radius: 9px; padding: 10px; font: inherit; text-transform: none; letter-spacing: 0; }
+.history-filters button { white-space: nowrap; }
+.history-section-heading { align-items: center; margin-bottom: 16px; }
+.history-section-heading h2 { margin: 0; font-size: 22px; }
+.history-list { display: grid; gap: 8px; }
+.history-row { display: flex; justify-content: space-between; gap: 20px; padding: 15px; border: 1px solid rgba(255,255,255,0.08); border-radius: 11px; background: rgba(255,255,255,0.025); }
+.history-row-main { display: grid; gap: 5px; min-width: 0; }
+.history-row-main strong { font-size: 16px; }
+.history-type { color: #74eaff; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.history-subtitle, .history-row-main small, .history-row-meta time { color: rgba(246, 251, 255, 0.58); }
+.history-row-meta { display: flex; align-items: center; justify-content: flex-end; gap: 9px; flex-wrap: wrap; min-width: 180px; text-align: right; }
+.history-row-meta a { color: #74eaff; font-size: 12px; }
+.history-station, .history-status { border-radius: 999px; padding: 5px 8px; font-size: 10px; font-weight: 800; letter-spacing: .06em; }
+.history-station { color: #74eaff; background: rgba(0,218,255,.1); }
+.history-status { background: rgba(255,255,255,.08); color: rgba(246,251,255,.8); }
+.history-status-completed, .history-status-fulfilled, .history-status-paid { color: #85efb0; background: rgba(90,220,140,.12); }
+.history-status-pending, .history-status-approved, .history-status-preparing { color: #ffd477; background: rgba(255,190,70,.12); }
+.history-status-rejected, .history-status-cancelled, .history-status-failed { color: #ff9d9d; background: rgba(255,90,90,.12); }
+.history-empty { display: grid; gap: 8px; padding: 48px 20px; text-align: center; color: rgba(246,251,255,.6); }
+.history-empty strong { color: #f6fbff; font-size: 17px; }
+@media (max-width: 1180px) { .history-summary { grid-template-columns: repeat(3, 1fr); } .history-filters form { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 720px) { .history-page { padding: 20px 14px; } .history-header, .history-section-heading, .history-row { display: grid; } .history-summary { grid-template-columns: repeat(2, 1fr); } .history-filters form { grid-template-columns: 1fr; } .history-row-meta { justify-content: flex-start; text-align: left; min-width: 0; } .history-back { justify-self: start; } }
+@media (max-width: 720px) { .history-best-selling-columns { display: none; } .history-best-selling-row { gap: 9px 12px; grid-template-columns: minmax(0, 1fr) auto; } .history-best-selling-item { grid-column: 1 / -1; } .history-best-selling-quantity { grid-template-columns: 32px minmax(40px, 1fr); } .history-best-selling-sales { grid-column: 2; } }
+@media (max-width: 720px) { .history-period-toolbar { display: grid; } .history-period-group { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; } .history-year-selector { width: 145px; } .history-period-range { display: grid; gap: 5px; } }

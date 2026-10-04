@@ -1,0 +1,80 @@
+.page {
+  background: #050708;
+  color: #f5fbfb;
+  min-height: 100vh;
+  padding: 34px clamp(16px, 4vw, 56px) 64px;
+}
+
+.shell { margin: 0 auto; max-width: 1440px; }
+.header { align-items: end; border-bottom: 1px solid rgba(255,255,255,.12); display: flex; justify-content: space-between; padding-bottom: 25px; }
+.eyebrow { color: #4de1ed; font-size: 10px; font-weight: 800; letter-spacing: .14em; margin: 0 0 9px; text-transform: uppercase; }
+.header h1 { font-size: clamp(28px, 4vw, 40px); line-height: 1.05; margin: 0; }
+.description { color: #aab4bb; font-size: 13px; line-height: 1.6; margin: 12px 0 0; max-width: 620px; }
+.summary { border-bottom: 1px solid rgba(255,255,255,.12); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 18px; }
+.summaryItem { border-right: 1px solid rgba(255,255,255,.12); display: grid; gap: 8px; min-height: 94px; padding: 19px 22px; }
+.summaryItem:first-child { padding-left: 0; }
+.summaryItem:last-child { border-right: 0; }
+.summaryItem span { color: #aab4bb; font-size: 11px; }
+.summaryItem strong { font-size: 25px; line-height: 1; }
+.notice { background: rgba(77,225,237,.08); border: 1px solid rgba(77,225,237,.35); color: #baf8fc; font-size: 12px; margin: 0 0 16px; padding: 12px 14px; }
+.workspace { display: grid; gap: 18px; grid-template-columns: minmax(0, 1.6fr) minmax(280px, .8fr); }
+.listPane, .details { background: #0b1012; border: 1px solid #1d2b2e; min-width: 0; }
+.toolbar { align-items: center; border-bottom: 1px solid #1d2b2e; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; padding: 14px; }
+.searchLabel { flex: 1 1 220px; }
+.searchLabel input { background: #06090a; border: 1px solid #304346; border-radius: 5px; color: #f5fbfb; font: inherit; font-size: 12px; min-height: 40px; padding: 9px 11px; width: 100%; }
+.searchLabel input:focus-visible, .filter:focus-visible, .filterSelected:focus-visible, .restaurantRow:focus-visible, .restaurantSelected:focus-visible, .activateButton:focus-visible, .deactivateButton:focus-visible, .cancelButton:focus-visible, .confirmButton:focus-visible { outline: 2px solid #4de1ed; outline-offset: 2px; }
+.filters { display: flex; flex-wrap: wrap; gap: 5px; }
+.filter, .filterSelected { background: transparent; border: 1px solid transparent; border-radius: 4px; color: #aab4bb; cursor: pointer; font: inherit; font-size: 11px; min-height: 36px; padding: 0 10px; }
+.filterSelected { background: rgba(77,225,237,.1); border-color: rgba(77,225,237,.4); color: #e9fbfc; }
+.restaurantList { display: grid; }
+.restaurantRow, .restaurantSelected { align-items: center; background: transparent; border: 0; border-bottom: 1px solid rgba(255,255,255,.08); color: inherit; cursor: pointer; display: flex; gap: 14px; justify-content: space-between; min-height: 70px; padding: 13px 16px; text-align: left; width: 100%; }
+.restaurantSelected { background: rgba(77,225,237,.07); box-shadow: inset 3px 0 #4de1ed; }
+.restaurantRow:hover, .restaurantSelected:hover { background: rgba(77,225,237,.08); }
+.restaurantIdentity { display: grid; gap: 5px; min-width: 0; }
+.restaurantIdentity strong { font-size: 13px; overflow-wrap: anywhere; }
+.restaurantIdentity small { color: #849396; font-size: 11px; overflow-wrap: anywhere; }
+.status { border: 1px solid currentColor; border-radius: 999px; flex: 0 0 auto; font-size: 9px; font-weight: 800; letter-spacing: .08em; padding: 5px 8px; text-transform: uppercase; }
+.statusActive { color: #8fe8bb; }
+.statusInactive { color: #ffab9f; }
+.empty { color: #aab4bb; font-size: 12px; line-height: 1.6; margin: 0; padding: 22px 16px; }
+.details { align-self: start; padding: 20px; }
+.details h2 { font-size: 20px; line-height: 1.2; margin: 0 0 20px; overflow-wrap: anywhere; }
+.detailList { display: grid; gap: 15px; margin: 0 0 22px; }
+.detailList > div { display: grid; gap: 5px; }
+.detailList dt { color: #849396; font-size: 10px; font-weight: 700; }
+.detailList dd { font-size: 12px; margin: 0; overflow-wrap: anywhere; }
+.detailList dd.status { justify-self: start; }
+.history { border-top: 1px solid #1d2b2e; margin-top: 20px; padding-top: 17px; }
+.historyHeading { align-items: center; display: flex; gap: 12px; justify-content: space-between; }
+.historyHeading h3 { font-size: 12px; margin: 0; }
+.historyButton { background: transparent; border: 1px solid #304346; border-radius: 4px; color: #c5d1d2; cursor: pointer; font: inherit; font-size: 10px; min-height: 32px; padding: 0 9px; }
+.historyButton:hover { border-color: #4de1ed; color: #e9fbfc; }
+.historyButton:disabled { cursor: wait; opacity: .55; }
+.historyList { display: grid; gap: 12px; list-style: none; margin: 15px 0 0; padding: 0; }
+.historyList li { border-left: 2px solid #4de1ed; display: grid; gap: 5px; min-width: 0; padding-left: 10px; }
+.historyList strong { font-size: 11px; }
+.historyList time, .historyList small, .historyEmpty { color: #849396; font-size: 10px; overflow-wrap: anywhere; }
+.historyEmpty { line-height: 1.5; margin: 14px 0 0; }
+.activateButton, .deactivateButton, .cancelButton, .confirmButton { border-radius: 5px; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; min-height: 42px; padding: 0 14px; }
+.activateButton { background: #10392b; border: 1px solid #368967; color: #c8f7df; width: 100%; }
+.deactivateButton { background: #3c1c1c; border: 1px solid #995c55; color: #ffd5ce; width: 100%; }
+.activateButton:hover { background: #164b38; }
+.deactivateButton:hover { background: #512323; }
+.dialogBackdrop { align-items: center; background: rgba(0,0,0,.76); display: flex; inset: 0; justify-content: center; padding: 18px; position: fixed; z-index: 1200; }
+.dialog { background: #0b1012; border: 1px solid #385056; box-shadow: 0 24px 70px rgba(0,0,0,.65); max-width: 480px; padding: 24px; width: 100%; }
+.dialog h2 { font-size: 19px; line-height: 1.25; margin: 0 0 12px; }
+.dialog p { color: #aab4bb; font-size: 12px; line-height: 1.7; margin: 0; }
+.dialogActions { display: flex; flex-wrap: wrap; gap: 9px; justify-content: flex-end; margin-top: 22px; }
+.cancelButton { background: transparent; border: 1px solid #405155; color: #d4dddd; }
+.confirmButton { background: #4de1ed; border: 1px solid #4de1ed; color: #061012; }
+.confirmButton:disabled, .cancelButton:disabled { cursor: wait; opacity: .55; }
+.visuallyHidden { clip: rect(0,0,0,0); clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px; }
+
+@media (max-width: 900px) { .workspace { grid-template-columns: minmax(0,1fr) minmax(250px,.8fr); } }
+@media (max-width: 680px) {
+  .page { padding: 24px 14px 42px; }
+  .summaryItem { min-height: 82px; padding: 15px 10px; }
+  .summaryItem strong { font-size: 21px; }
+  .workspace { grid-template-columns: 1fr; }
+  .details { order: -1; }
+}

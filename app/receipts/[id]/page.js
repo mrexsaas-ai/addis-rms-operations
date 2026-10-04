@@ -1,6 +1,8 @@
 import { notFound, redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getAuthContext, SERVICE_ROLES } from "@/lib/auth";
+import PendingPaymentActions from "./PendingPaymentActions";
+import { BUSINESS_TIME_ZONE } from "@/lib/business-date.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +29,7 @@ export default async function ReceiptPage({ params }) {
   const [{ data: payments, error: paymentsError }, { data: restaurant, error: restaurantError }] = await Promise.all([
     supabase
     .from("payments")
-    .select("amount, method, status, created_at, reference_number, cash_received, change_amount")
+    .select("id, amount, method, status, created_at, reference_number, cash_received, change_amount")
     .eq("order_id", order.id)
     .eq("restaurant_id", membership.restaurant_id)
     .order("created_at", { ascending: true }),
@@ -40,14 +42,17 @@ export default async function ReceiptPage({ params }) {
 
   if (paymentsError) throw paymentsError;
   if (restaurantError) throw restaurantError;
-  const paidAmount = (payments || []).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-  const cashPayment = (payments || []).find((payment) => payment.method === "CASH");
+  const verifiedPayments = (payments || []).filter((payment) => payment.status === "COMPLETED");
+  const paidAmount = verifiedPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const cashPayment = verifiedPayments.find((payment) => payment.method === "CASH");
+  const pendingPayments = (payments || []).filter((payment) => payment.status === "PENDING");
+  const paymentStatusLabel = (status) => status === "COMPLETED" ? "PAID" : status;
 
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: 32 }}>
       <h1>{restaurant?.name || "Restaurant"} — Receipt</h1>
       <p>Order {order.order_number}</p>
-      <p>{new Date(order.created_at).toLocaleString("en-US")}</p>
+      <p>{new Date(order.created_at).toLocaleString("en-US", { timeZone: BUSINESS_TIME_ZONE })}</p>
       <p>{order.tables?.name || (order.tables?.table_number ? `Table ${order.tables.table_number}` : "Takeaway")}</p>
       <ul>
         {(order.order_items || []).map((item, index) => (
@@ -60,15 +65,28 @@ export default async function ReceiptPage({ params }) {
       <strong>Total: ETB {order.total}</strong>
       {payments?.length ? (
         <div>
-          <p>Payment method: {payments.map((payment) => payment.method).join(", ")}</p>
+          <p>Payment method: {payments.map((payment) => `${payment.method} (${paymentStatusLabel(payment.status)})`).join(", ")}</p>
           <p>Amount paid: ETB {paidAmount.toFixed(2)}</p>
-          {payments.find((payment) => payment.reference_number) ? (
-            <p>Reference: {payments.find((payment) => payment.reference_number).reference_number}</p>
+          {verifiedPayments.find((payment) => payment.reference_number) ? (
+            <p>Reference: {verifiedPayments.find((payment) => payment.reference_number).reference_number}</p>
           ) : null}
           {cashPayment?.change_amount != null ? (
             <p>Change: ETB {Number(cashPayment.change_amount).toFixed(2)}</p>
           ) : null}
         </div>
+      ) : null}
+
+      {pendingPayments.length ? (
+        <section style={{ marginTop: 24, borderTop: "1px solid #e5e7eb", paddingTop: 20 }}>
+          <h2>Pending payment verification</h2>
+          {pendingPayments.map((payment) => (
+            <div key={payment.created_at + payment.method} style={{ marginTop: 12, padding: 12, border: "1px solid rgba(0,229,255,.24)", borderRadius: 8, background: "#101519", color: "#f5fbfc" }}>
+              <p><strong>{payment.method}</strong> — {payment.amount ? `ETB ${Number(payment.amount).toFixed(2)}` : "Amount pending"}</p>
+              {payment.reference_number ? <p>Reference: {payment.reference_number}</p> : null}
+              <PendingPaymentActions payment={payment} />
+            </div>
+          ))}
+        </section>
       ) : null}
     </main>
   );
